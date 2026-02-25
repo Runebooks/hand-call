@@ -1,0 +1,21 @@
+{
+  "name": "eks-agent",
+  "description": "Kubernetes inspection agent",
+  "url": "http://localhost:8081",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": false
+  },
+  "skills": [
+    {
+      "id": "k8s_inspect",
+      "name": "Inspect Kubernetes Pods",
+      "description": "Check pod status, logs, crash reasons",
+      "tags": ["kubernetes", "pod", "crashloop", "logs"],
+      "examples": [
+        "Why is my pod crashing?",
+        "Show logs of pod"
+      ]
+    }
+  ]
+}
