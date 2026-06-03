@@ -1,0 +1,67 @@
+{
+  "name": "kubernetes-agent",
+  "description": "Kubernetes investigation + staging mutations (restart/delete/scale) with Slack yes/no confirmation. Read-only when K8S_MUTATIONS_ENABLED=false.",
+  "url": "http://kubernetes-agent.a2a-ops.svc.cluster.local:8082",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "push_notifications": false
+  },
+  "skills": [
+    {
+      "id": "staging_mutations",
+      "name": "Staging Mutations",
+      "description": "Restart, delete, or scale workloads after yes/no confirmation (staging only)",
+      "tags": ["kubernetes", "restart", "delete", "scale", "rollout"],
+      "examples": [
+        "Can you restart this pod?",
+        "Scale deployment checkout to 3 replicas",
+        "Rollout restart deployment api-gateway"
+      ]
+    },
+    {
+      "id": "pod_status",
+      "name": "Pod Status",
+      "description": "List and describe pods, including CrashLoopBackOff and restarts",
+      "tags": ["kubernetes", "k8s", "pod", "pods", "restarting", "crash", "crashloop", "oom", "status"],
+      "examples": [
+        "Why is the payments pod restarting?",
+        "Show pods in CrashLoopBackOff",
+        "List pods in namespace production"
+      ]
+    },
+    {
+      "id": "pod_logs",
+      "name": "Pod Logs",
+      "description": "Fetch container logs including previous crashed instance",
+      "tags": ["kubernetes", "k8s", "log", "logs", "stderr", "stdout"],
+      "examples": [
+        "Get logs for payments-7d4b8c-x2k9f",
+        "Show previous logs for the api gateway pod"
+      ]
+    },
+    {
+      "id": "deployments",
+      "name": "Deployments",
+      "description": "List deployments and replica health",
+      "tags": ["kubernetes", "k8s", "deployment", "deploy", "replicas", "rollout"],
+      "examples": [
+        "List deployments in default namespace",
+        "Is the checkout deployment healthy?"
+      ]
+    },
+    {
+      "id": "events",
+      "name": "Cluster Events",
+      "description": "Recent warning events for troubleshooting",
+      "tags": ["kubernetes", "k8s", "event", "events", "warning"],
+      "examples": [
+        "Show recent warning events in kube-system",
+        "What events happened for pod nginx?"
+      ]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
+}

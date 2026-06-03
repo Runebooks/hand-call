@@ -1,0 +1,76 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubernetes-agent
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: kubernetes-agent
+    app.kubernetes.io/part-of: a2a-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubernetes-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubernetes-agent
+        app.kubernetes.io/part-of: a2a-ops
+    spec:
+      serviceAccountName: kubernetes-agent
+      containers:
+        - name: agent
+          image: python:3.11-slim-bookworm
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              tar -xzf /src/agent-src.tar.gz -C /app
+              pip install --no-cache-dir -q -r /app/requirements.txt
+              exec python -m agents.kubernetes.server
+          ports:
+            - name: a2a
+              containerPort: 8082
+          envFrom:
+            - secretRef:
+                name: kubernetes-agent-llm
+                optional: true
+          env:
+            - name: A2A_PORT
+              value: "8082"
+            - name: A2A_HOST
+              value: "0.0.0.0"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: OPENAI_MODEL
+              value: "gpt-5.5"
+            - name: OPENAI_REASONING_EFFORT
+              value: "none"
+          volumeMounts:
+            - name: source
+              mountPath: /src
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 45
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+      volumes:
+        - name: source
+          configMap:
+            name: a2a-agents-source

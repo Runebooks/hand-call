@@ -1,0 +1,31 @@
+{
+  "name": "prometheus-agent",
+  "description": "Queries Prometheus metrics, alerts, and Haystack-style performance data (read-only)",
+  "url": "http://prometheus-agent.a2a-ops.svc.cluster.local:8080",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "query_metrics",
+      "name": "Query Metrics",
+      "description": "Execute PromQL queries and return time-series summaries",
+      "tags": ["prometheus", "metrics", "monitoring", "cpu", "memory", "latency", "rpm", "haystack", "dashboard"],
+      "examples": [
+        "What is the RPM for the worker?",
+        "Show error rate from Prometheus for freshdesk"
+      ]
+    },
+    {
+      "id": "check_alerts",
+      "name": "Check Alerts",
+      "description": "List firing Prometheus alerts",
+      "tags": ["alerts", "firing", "alertmanager", "trigmetry"]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
+}

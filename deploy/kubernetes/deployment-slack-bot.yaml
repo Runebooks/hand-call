@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: slack-bot
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: slack-bot
+    app.kubernetes.io/part-of: a2a-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: slack-bot
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: slack-bot
+        app.kubernetes.io/part-of: a2a-ops
+    spec:
+      serviceAccountName: kubernetes-agent
+      containers:
+        - name: slack-bot
+          image: python:3.11-slim-bookworm
+          imagePullPolicy: IfNotPresent
+          workingDir: /app
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              tar -xzf /src/agent-src.tar.gz -C /app
+              pip install --no-cache-dir -q -r /app/requirements.txt
+              exec python -m master.slack_bot
+          envFrom:
+            - secretRef:
+                name: slack-bot-secrets
+          env:
+            - name: MASTER_AGENT_URL
+              value: "http://master-agent.a2a-ops.svc.cluster.local:8095"
+            - name: SLACK_TRIGGER_MODE
+              value: "mention"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          volumeMounts:
+            - name: source
+              mountPath: /src
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: source
+          configMap:
+            name: slack-bot-source

@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-agent
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: prometheus-agent
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: prometheus-agent
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus-agent
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: prometheus-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: prometheus-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: prometheus-agent
+    spec:
+      containers:
+        - name: agent
+          image: python:3.11-slim-bookworm
+          workingDir: /app
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              tar -xzf /src/agent-src.tar.gz -C /app
+              pip install --no-cache-dir -q -r /app/requirements.txt
+              exec python -m agents.prometheus.server
+          ports:
+            - containerPort: 8080
+          env:
+            - name: A2A_PORT
+              value: "8080"
+            - name: PROMETHEUS_URL
+              value: ""
+          volumeMounts:
+            - name: source
+              mountPath: /src
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 25
+            periodSeconds: 10
+      volumes:
+        - name: source
+          configMap:
+            name: a2a-agents-source

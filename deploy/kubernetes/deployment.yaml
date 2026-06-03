@@ -1,0 +1,55 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kubernetes-agent
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: kubernetes-agent
+    app.kubernetes.io/part-of: a2a-ops
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kubernetes-agent
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kubernetes-agent
+        app.kubernetes.io/part-of: a2a-ops
+    spec:
+      serviceAccountName: kubernetes-agent
+      containers:
+        - name: agent
+          image: IMAGE_PLACEHOLDER
+          imagePullPolicy: Always
+          ports:
+            - name: a2a
+              containerPort: 8082
+          env:
+            - name: A2A_PORT
+              value: "8082"
+            - name: A2A_HOST
+              value: "0.0.0.0"
+            - name: LOG_LEVEL
+              value: "INFO"
+            - name: K8S_MUTATIONS_ENABLED
+              value: "true"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8082
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

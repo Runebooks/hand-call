@@ -1,0 +1,25 @@
+{
+  "name": "rds-agent",
+  "description": "Read-only RDS / database inspection and slow-query context",
+  "url": "http://rds-agent.a2a-ops.svc.cluster.local:8081",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "slow_queries",
+      "name": "Slow Queries",
+      "description": "Investigate slow queries and DB health",
+      "tags": ["rds", "database", "db", "sql", "postgres", "mysql", "slow query", "connection pool"],
+      "examples": [
+        "Are there slow queries on the primary RDS?",
+        "Is the database connection pool exhausted?"
+      ]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
+}

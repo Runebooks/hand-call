@@ -1,0 +1,7 @@
+{
+  "text": "Subject:\n 🔴 Reopen KubePodCrashLooping\nalertname:KubePodCrashLooping\nnamespace:a2a-ops\nstatus:firing\ncluster:fcc-runway\nalert_sre_attributes:sopctl-k8s-worker-apse2-7759b4764-sk8vt\n\n@NOC Handover Investigate this",
+  "channel": "C0B7R75EQ8K",
+  "thread_ts": "1234567890.123456",
+  "user_prompt": "Investigate this",
+  "post_to_slack": false
+}

@@ -1,0 +1,56 @@
+{
+  "name": "master-agent",
+  "description": "NOC investigation router — discovers specialist Agent Cards, routes by alertname/keywords/LLM, and orchestrates A2A tasks to prometheus, rds, and kubernetes agents.",
+  "url": "http://master-agent.a2a-ops.svc.cluster.local:8095",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "push_notifications": false
+  },
+  "skills": [
+    {
+      "id": "investigate",
+      "name": "Investigate Alert",
+      "description": "Route NOC alert context to the correct specialist agent and return investigation results",
+      "tags": ["noc", "router", "orchestrator", "investigate", "alert", "handover"],
+      "examples": [
+        "Investigate CrashLoopBackOff for pod payments-7d4b8c-x2k9f in namespace production",
+        "What is the replica count of this deployment?",
+        "Get logs for the crashing pod"
+      ]
+    },
+    {
+      "id": "route_kubernetes",
+      "name": "Kubernetes Routing",
+      "description": "Route Kube* and pod crash alerts to kubernetes-agent",
+      "tags": ["kubernetes", "k8s", "pod", "crashloop", "crashloopbackoff", "deployment"],
+      "examples": [
+        "KubePodCrashLooping namespace a2a-ops",
+        "CrashLoopBackOff pod test-agent-workload-5675697b79-2xh2z"
+      ]
+    },
+    {
+      "id": "route_prometheus",
+      "name": "Prometheus Routing",
+      "description": "Route metric and latency alerts to prometheus-agent",
+      "tags": ["prometheus", "metric", "latency", "cpu", "memory"],
+      "examples": [
+        "High CPU on api-gateway",
+        "P99 latency spike on checkout service"
+      ]
+    },
+    {
+      "id": "route_rds",
+      "name": "RDS Routing",
+      "description": "Route database alerts to rds-agent",
+      "tags": ["rds", "database", "mysql", "postgres", "connection", "replica lag"],
+      "examples": [
+        "RDS connection count high",
+        "Database replica lag on orders-db"
+      ]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
+}

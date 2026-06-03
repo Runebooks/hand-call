@@ -1,0 +1,14 @@
+# A2A Protocol - Core dependencies
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+pydantic>=2.10.0
+sse-starlette>=2.1.0
+httpx>=0.27.0
+
+# Kubernetes agent
+kubernetes>=31.0.0
+
+# Slack bot
+slack-bolt>=1.21.0
+slack-sdk>=3.33.0
+

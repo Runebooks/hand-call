@@ -1,0 +1,79 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: a2a-webhook-api
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: a2a-webhook-api
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: a2a-webhook-api
+  ports:
+    - port: 8090
+      targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: a2a-webhook-api
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: a2a-webhook-api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: a2a-webhook-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: a2a-webhook-api
+    spec:
+      containers:
+        - name: api
+          image: python:3.11-slim-bookworm
+          workingDir: /app
+          command: ["/bin/bash", "-ec"]
+          args:
+            - |
+              tar -xzf /src/agent-src.tar.gz -C /app
+              pip install --no-cache-dir -q -r /app/requirements.txt
+              exec python -m master.webhook_api
+          ports:
+            - containerPort: 8090
+          envFrom:
+            - secretRef:
+                name: kubernetes-agent-llm
+                optional: true
+          env:
+            - name: MASTER_AGENT_URL
+              value: "http://master-agent.a2a-ops.svc.cluster.local:8095"
+            - name: AGENT_URLS
+              value: "http://prometheus-agent.a2a-ops.svc.cluster.local:8080,http://rds-agent.a2a-ops.svc.cluster.local:8081,http://kubernetes-agent.a2a-ops.svc.cluster.local:8082"
+            - name: KUBERNETES_AGENT_URL
+              value: "http://kubernetes-agent.a2a-ops.svc.cluster.local:8082"
+            - name: WEBHOOK_PORT
+              value: "8090"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+          volumeMounts:
+            - name: source
+              mountPath: /src
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8090
+            initialDelaySeconds: 25
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+      volumes:
+        - name: source
+          configMap:
+            name: a2a-webhook-api-source

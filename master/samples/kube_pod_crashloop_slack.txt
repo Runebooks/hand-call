@@ -1,0 +1,30 @@
+Subject:
+ 🔴 Reopen KubePodCrashLooping
+@Rayala Ananth @Vinoth Sekar
+Ticket Link
+alert_owner:cre-fcc-alerts
+current_value:7596
+hostname:app-92387838
+product:Freshdesk
+alertname:KubePodCrashLooping
+alert_type:app
+sop:NA
+Ipaddr:10.0.0.6
+oncall:yes
+region:ap-south-1
+sopctl:yes
+source:trigmetry
+status:firing
+cluster:fcc-runway
+service:EKS/Opsworks/EC2
+summary:RPM is high - IND - privapiv2app
+priority:p0
+severity:critical
+aws_accid:528075892726
+component:Application group the alert belongs to
+dashboard:https://metrics.haystack.es/d/B8ahjg5Gk/freshdesk-bg-overview-2-0
+namespace:a2a-ops
+threshold:6500
+dashboard1:https://metrics.haystack.es/
+alert_sre_attributes:test-crashloop
+notification_channel:C0B7R75EQ8K
