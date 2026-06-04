@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+from common.haystack_tenant import is_haystack_tenant
+
 
 @dataclass
 class AlertContext:
@@ -233,7 +235,11 @@ def infer_alert_from_context(text: str, user_prompt: str = "") -> Optional[Alert
     fields["alertname"] = alertname
     if not fields.get("status"):
         fields["status"] = "firing"
-    if fields.get("hostname") and not fields.get("alert_sre_attributes"):
+    if (
+        fields.get("hostname")
+        and not fields.get("alert_sre_attributes")
+        and not is_haystack_tenant(fields["hostname"])
+    ):
         fields["alert_sre_attributes"] = fields["hostname"]
 
     return _alert_from_fields(text, "", fields)

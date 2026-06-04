@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "grafana-fw-noc": {
+      "url": "https://mcp.haystack.es/grafana/fw-noc",
+      "headers": {
+        "Authorization": "Bearer REPLACE_WITH_gcloud_auth_print-identity-token"
+      }
+    }
+  }
+}

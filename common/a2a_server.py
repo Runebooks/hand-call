@@ -243,6 +243,9 @@ class A2AServer(ABC):
             llm_enabled = getattr(self, "llm", None)
             if llm_enabled is not None and hasattr(llm_enabled, "enabled"):
                 body["llm_enabled"] = llm_enabled.enabled()
+                reason = getattr(llm_enabled, "disabled_reason", "")
+                if reason:
+                    body["llm_disabled_reason"] = reason
                 if llm_enabled.enabled():
                     body["llm_provider"] = getattr(
                         llm_enabled, "provider", "openai"

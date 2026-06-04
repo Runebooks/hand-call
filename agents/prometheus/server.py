@@ -16,13 +16,14 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.a2a_server import A2AServer
+from common.llm import LLMClient
 from common.models import Artifact, Task
 
-from agents.prometheus.prom_client import (
-    PromAuthError,
-    PromClient,
-    build_hostname_promql,
-)
+from agents.prometheus.metrics_backend import MetricsBackend
+from common.haystack_tenant import is_haystack_tenant, resolve_haystack_tenant
+from agents.prometheus.prom_client import PromAuthError, PromClient
+from agents.prometheus.promql_planner import plan_promql
+from agents.prometheus.slack_format import compact_slack_enabled, format_compact_response
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -37,26 +38,35 @@ DEFAULT_PORT = int(os.environ.get("A2A_PORT", "8080"))
 class PrometheusAgent(A2AServer):
     def __init__(self, **kwargs):
         super().__init__(agent_card_path=str(CARD_PATH), **kwargs)
-        self.prom = PromClient.from_env()
+        self.metrics = MetricsBackend.from_env()
+        self.prom = self.metrics.prom
+        self.llm = LLMClient()
 
     async def on_startup(self) -> None:
-        if not self.prom:
-            logger.info("PROMETHEUS_URL unset — answers use alert metadata only")
+        if not self.metrics.prom and not self.metrics.mcp:
+            logger.info("PROMETHEUS_URL and HAYSTACK_MCP_URL unset — alert metadata only")
             return
-        logger.info("Prometheus URL configured: %s", self.prom.base_url)
-        if not self.prom.live_query_enabled:
+        logger.info("Metrics config: %s", self.metrics.describe())
+        if os.environ.get("PROMETHEUS_ORG_ID", "").strip():
+            logger.info("Prometheus org header: X-Scope-OrgID=%s", os.environ.get("PROMETHEUS_ORG_ID"))
+        if self.llm.enabled():
+            logger.info("PromQL LLM planning enabled (model=%s)", self.llm.model)
+        else:
+            logger.info("PromQL LLM planning disabled (%s)", self.llm.disabled_reason or "rules only")
+        if not self.metrics.live_query_enabled:
             logger.info(
-                "Live PromQL disabled (public URL / no token). "
-                "Set PROMETHEUS_TOKEN or PROMETHEUS_INTERNAL=true for live queries."
+                "Live PromQL disabled. Set PROMETHEUS_TOKEN / in-cluster PROMETHEUS_URL "
+                "or HAYSTACK_MCP_URL + HAYSTACK_MCP_TOKEN."
             )
             return
-        try:
-            self.prom.health()
-            logger.info("Prometheus API reachable for live queries")
-        except PromAuthError as exc:
-            logger.warning("Prometheus SSO/auth: %s", exc)
-        except Exception as exc:
-            logger.warning("Prometheus health check failed: %s", exc)
+        self.metrics.startup_checks()
+        if self.prom and self.prom.live_query_enabled:
+            try:
+                payload = self.prom.query("up")
+                n = len(payload.get("data", {}).get("result") or [])
+                logger.info("FWSS Prom API ready (%d series for up)", n)
+            except Exception as exc:
+                logger.warning("FWSS Prom API probe failed: %s", exc)
 
     async def process_task(self, task: Task) -> Task:
         query = task.message.get_text() if task.message else ""
@@ -73,54 +83,124 @@ class PrometheusAgent(A2AServer):
 
     def _handle_query(self, query: str, meta: dict[str, Any]) -> str:
         user = _user_question(query)
-        lines = ["**Prometheus / metrics**", ""]
-
         rpm_block = _format_rpm_vs_threshold(meta, user)
-        if rpm_block:
-            lines.append(rpm_block)
-            lines.append("")
+        explicit = _extract_promql(user)
 
+        if not self.metrics.live_query_enabled:
+            return _metadata_only_answer(user, meta, rpm_block)
+
+        prom_plan = plan_promql(
+            user,
+            meta,
+            llm=self.llm,
+            prom=self.prom,
+            explicit=explicit,
+        )
+
+        if not prom_plan.queries and not rpm_block:
+            return _metadata_only_answer(user, meta, rpm_block)
+
+        query_results: list[tuple[str, dict[str, Any], str]] = []
+        if prom_plan.queries:
+            for promql in prom_plan.queries:
+                try:
+                    payload, source = self.metrics.query(promql, meta)
+                    query_results.append((promql, payload, source))
+                except PromAuthError as exc:
+                    return _metadata_only_answer(
+                        user, meta, rpm_block, extra=f"_Live PromQL skipped: {exc}_"
+                    )
+                except Exception as exc:
+                    logger.warning("Query failed for %s: %s", promql, exc)
+
+        if compact_slack_enabled() and not explicit:
+            body = format_compact_response(
+                user_question=user,
+                meta=meta,
+                plan=prom_plan,
+                query_results=query_results,
+                rpm_block=rpm_block,
+                explicit_promql=False,
+            )
+            if body:
+                return f"**Prometheus / metrics**\n\n{body}"
+
+        return _verbose_answer(
+            user, meta, rpm_block, explicit, prom_plan, query_results, self.metrics
+        )
+
+
+def _metadata_only_answer(
+    user: str,
+    meta: dict[str, Any],
+    rpm_block: str,
+    *,
+    extra: str = "",
+) -> str:
+    lines = ["**Prometheus / metrics**", ""]
+    if rpm_block:
+        lines.append(rpm_block)
+        lines.append("")
+    ctx = _format_alert_metric_context(meta)
+    if ctx:
+        lines.append(ctx)
+        lines.append("")
+    if extra:
+        lines.append(extra)
+    elif _wants_live_query(user, meta):
+        lines.append(
+            "_Live PromQL not configured._ Set PROMETHEUS_URL + PROMETHEUS_TOKEN (FWSS) "
+            "for Haystack **fw-noc**._"
+        )
+    dashboard = meta.get("dashboard") or meta.get("dashboard1")
+    if dashboard and "rpm" in user.lower():
+        lines.append(f"<{dashboard}|Open Haystack dashboard>")
+    return "\n".join(lines)
+
+
+def _verbose_answer(
+    user: str,
+    meta: dict[str, Any],
+    rpm_block: str,
+    explicit: Optional[str],
+    plan: Any,
+    query_results: list[tuple[str, dict[str, Any], str]],
+    metrics: MetricsBackend,
+) -> str:
+    lines = ["**Prometheus / metrics**", ""]
+    if rpm_block:
+        lines.append(rpm_block)
+        lines.append("")
+    if not explicit:
         ctx = _format_alert_metric_context(meta)
         if ctx:
             lines.append(ctx)
             lines.append("")
 
-        explicit = _extract_promql(user)
-        if explicit and self.prom and self.prom.live_query_enabled:
-            try:
-                payload = self.prom.query(explicit)
-                lines.append(f"**PromQL:** `{explicit}`\n")
-                lines.append(PromClient.format_instant_result(payload))
-                return "\n".join(lines)
-            except Exception as exc:
-                lines.append(f"_Live PromQL failed: {exc}_\n")
-
-        if self.prom and self.prom.live_query_enabled and _wants_live_query(user, meta):
-            promql = build_hostname_promql(meta)
-            if promql:
-                try:
-                    payload = self.prom.query(promql)
-                    lines.append(f"**Live query:** `{promql}`\n")
-                    lines.append(PromClient.format_instant_result(payload))
-                    return "\n".join(lines)
-                except PromAuthError as exc:
-                    lines.append(f"_Live PromQL skipped: {exc}_\n")
-                except Exception as exc:
-                    lines.append(f"_Live PromQL failed: {exc}_\n")
-        elif self.prom and _wants_live_query(user, meta):
-            lines.append(
-                "_Live PromQL not configured._ `https://metrics.haystack.es` is the **Grafana UI** "
-                "(Google SSO). For live metrics, set one of:\n"
-                "- `PROMETHEUS_URL` → in-cluster Prometheus API (e.g. `http://prometheus…:9090`)\n"
-                "- `PROMETHEUS_TOKEN` → bearer token for authenticated API\n"
-                "- `PROMQL_HOSTNAME_QUERY` → your Freshdesk RPM metric query\n"
-            )
-
-        dashboard = meta.get("dashboard") or meta.get("dashboard1")
-        if dashboard and "rpm" in user.lower():
-            lines.append(f"<{dashboard}|Open Haystack dashboard for live charts>")
-
+    if not query_results:
+        lines.append("_No live series returned._")
+        if plan.note:
+            lines.append(f"_{plan.note}_")
+        hint = PromClient._empty_query_hint(explicit or "")
+        if hint:
+            lines.append(hint)
         return "\n".join(lines)
+
+    for promql, payload, source in query_results:
+        header = f"**PromQL:** `{promql}`" if explicit else f"**Live metrics** (`{promql}`)"
+        lines.append(f"{header} — {source}\n")
+        lines.append(
+            metrics.format_result(
+                payload,
+                source=source,
+                promql=promql,
+                summarize=not explicit and _is_natural_metrics_request(user),
+            )
+        )
+        lines.append("")
+    if plan.note:
+        lines.append(f"_{plan.note}_")
+    return "\n".join(lines).strip()
 
 
 def _user_question(query: str) -> str:
@@ -141,7 +221,6 @@ def _parse_number(raw: Any) -> Optional[float]:
 
 
 def _format_rpm_vs_threshold(meta: dict[str, Any], user: str) -> str:
-    """Answer RPM vs threshold from Trigmetry alert fields (authoritative at alert time)."""
     current = _parse_number(meta.get("current_value") or meta.get("fields", {}).get("current_value"))
     threshold = _parse_number(meta.get("threshold") or meta.get("fields", {}).get("threshold"))
     if current is None or threshold is None:
@@ -171,25 +250,51 @@ def _format_rpm_vs_threshold(meta: dict[str, Any], user: str) -> str:
     if product:
         lines.append(f"- **Product:** `{product}`")
     if hostname:
-        lines.append(f"- **Host:** `{hostname}`")
+        if is_haystack_tenant(hostname):
+            lines.append(f"- **Haystack tenant:** `{hostname}`")
+        else:
+            lines.append(f"- **Host:** `{hostname}`")
     if summary:
         lines.append(f"- **Summary:** {summary}")
     return "\n".join(lines)
 
 
 def _extract_promql(text: str) -> str | None:
-    match = re.search(r"(?:promql|query)\s*[:=]\s*[`'\"]?([^`\"'\n]+)", text, re.I)
+    match = re.search(
+        r"(?:promql|query)\s*[:=]\s*(.+?)(?:\s*$|\s*```)",
+        text,
+        re.I | re.DOTALL,
+    )
     if match:
-        return match.group(1).strip()
+        q = match.group(1).strip().strip("`").strip("'").strip('"')
+        return q or None
     if text.strip().startswith("{") or text.strip().startswith("sum("):
         return text.strip()
     return None
 
 
+def _is_natural_metrics_request(text: str) -> bool:
+    if _extract_promql(text):
+        return False
+    return bool(
+        re.search(
+            r"\b(fetch|get|show|what|current)\b.*\bmetrics?\b|\bmetrics?\b.*\b(alert|now|current)\b",
+            text,
+            re.I,
+        )
+    )
+
+
 def _wants_live_query(text: str, meta: dict[str, Any]) -> bool:
     if re.search(
         r"\b(rpm|metric|metrics|prometheus|promql|current.?value|threshold|latency|"
-        r"cpu|memory|haystack|dashboard|spike|rate)\b",
+        r"cpu|memory|haystack|dashboard|spike|rate|fetch|current)\b",
+        text,
+        re.I,
+    ):
+        return True
+    if re.search(
+        r"\b(fetch|get|show|what|current)\b.*\bmetrics?\b|\bmetrics?\b.*\b(now|current)\b",
         text,
         re.I,
     ):
@@ -199,7 +304,6 @@ def _wants_live_query(text: str, meta: dict[str, Any]) -> bool:
 
 def _format_alert_metric_context(meta: dict[str, Any]) -> str:
     parts: list[str] = []
-    skip = {"current_value", "threshold", "summary"}
     for key in (
         "alertname",
         "product",
@@ -211,10 +315,6 @@ def _format_alert_metric_context(meta: dict[str, Any]) -> str:
     ):
         val = meta.get(key) or meta.get("fields", {}).get(key)
         if val:
-            parts.append(f"- **{key}:** `{val}`")
-    for key in ("current_value", "threshold", "summary"):
-        val = meta.get(key) or meta.get("fields", {}).get(key)
-        if val and key not in skip:
             parts.append(f"- **{key}:** `{val}`")
     if not parts:
         return ""

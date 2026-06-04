@@ -1,0 +1,90 @@
+# Optional: run Grafana MCP server inside the cluster (a2a-ops).
+#
+# Use this ONLY if Haystack managed MCP (o11y.int.haystack.es/mcp) stays 401 and
+# observability gives you a Grafana API URL + service account token for fw-noc.
+#
+# prometheus-agent then calls:
+#   HAYSTACK_MCP_URL=http://haystack-grafana-mcp.a2a-ops.svc.cluster.local:8000
+#   PROMETHEUS_QUERY_BACKEND=auto
+#
+# Peering / log shipping does NOT replace this — MCP needs Grafana API credentials.
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: haystack-grafana-mcp
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: haystack-grafana-mcp
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: haystack-grafana-mcp
+  ports:
+    - name: mcp
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: haystack-grafana-mcp
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: haystack-grafana-mcp
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: haystack-grafana-mcp
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: haystack-grafana-mcp
+    spec:
+      containers:
+        - name: mcp-grafana
+          # Pin tag after observability confirms compatibility with Haystack Grafana
+          image: grafana/mcp-grafana:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - -t
+            - streamable-http
+            - --address
+            - 0.0.0.0:8000
+            - --disable-write
+          ports:
+            - containerPort: 8000
+          env:
+            # Ask observability: in-cluster Grafana API base (NOT the Prom push URL)
+            - name: GRAFANA_URL
+              valueFrom:
+                secretKeyRef:
+                  name: haystack-grafana-mcp-config
+                  key: GRAFANA_URL
+            # Grafana service account token (may differ from FWSS telemetry token)
+            - name: GRAFANA_SERVICE_ACCOUNT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: haystack-grafana-mcp-config
+                  key: GRAFANA_SERVICE_ACCOUNT_TOKEN
+            # Haystack tenant / org for fw-noc (if required by your Grafana stack)
+            - name: GRAFANA_ORG_ID
+              valueFrom:
+                secretKeyRef:
+                  name: haystack-grafana-mcp-config
+                  key: GRAFANA_ORG_ID
+                  optional: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

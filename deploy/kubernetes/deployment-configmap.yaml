@@ -44,7 +44,7 @@ spec:
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: OPENAI_MODEL
-              value: "gpt-5.5"
+              value: "Azure-GPT-5.2-chat"
             - name: OPENAI_REASONING_EFFORT
               value: "none"
             - name: K8S_MUTATIONS_ENABLED

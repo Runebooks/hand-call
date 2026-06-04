@@ -7,18 +7,16 @@ NAMESPACE="${NAMESPACE:-a2a-ops}"
 echo "==> Shared source ConfigMap"
 ARCHIVE="$(mktemp -t a2a-agents-src.XXXXXX.tar.gz)"
 COPYFILE_DISABLE=1 tar -czf "${ARCHIVE}" -C "${ROOT}" common agents master requirements.txt
+# Recreate (not apply) to avoid last-applied annotation growing past 256KiB limit
+kubectl delete configmap a2a-agents-source kubernetes-agent-source \
+  --namespace="${NAMESPACE}" --ignore-not-found
 kubectl create configmap a2a-agents-source \
   --namespace="${NAMESPACE}" \
-  --from-file=agent-src.tar.gz="${ARCHIVE}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=agent-src.tar.gz="${ARCHIVE}"
 kubectl create configmap kubernetes-agent-source \
   --namespace="${NAMESPACE}" \
-  --from-file=agent-src.tar.gz="${ARCHIVE}" \
-  --dry-run=client -o yaml | kubectl apply -f -
+  --from-file=agent-src.tar.gz="${ARCHIVE}"
 rm -f "${ARCHIVE}"
-
-echo "==> Rollout restart (pick up ConfigMap source)"
-kubectl rollout restart deployment/kubernetes-agent deployment/prometheus-agent deployment/rds-agent deployment/master-agent -n "${NAMESPACE}"
 
 echo "==> RBAC + K8s agent"
 kubectl apply -f "${ROOT}/deploy/kubernetes/rbac.yaml"
@@ -35,6 +33,17 @@ kubectl rollout status deployment/rds-agent -n "${NAMESPACE}" --timeout=180s
 echo "==> Master agent (router)"
 kubectl apply -f "${ROOT}/deploy/kubernetes/deployment-master-agent.yaml"
 kubectl rollout status deployment/master-agent -n "${NAMESPACE}" --timeout=180s
+
+echo "==> Rollout restart (pick up ConfigMap source)"
+for dep in kubernetes-agent prometheus-agent rds-agent master-agent; do
+  if kubectl get deployment "${dep}" -n "${NAMESPACE}" >/dev/null 2>&1; then
+    kubectl rollout restart "deployment/${dep}" -n "${NAMESPACE}"
+  fi
+done
+kubectl rollout status deployment/kubernetes-agent -n "${NAMESPACE}" --timeout=180s 2>/dev/null || true
+kubectl rollout status deployment/prometheus-agent -n "${NAMESPACE}" --timeout=180s 2>/dev/null || true
+kubectl rollout status deployment/rds-agent -n "${NAMESPACE}" --timeout=180s 2>/dev/null || true
+kubectl rollout status deployment/master-agent -n "${NAMESPACE}" --timeout=180s 2>/dev/null || true
 
 echo ""
 echo "Agents (in cluster):"

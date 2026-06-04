@@ -74,10 +74,28 @@ class KubernetesAgent(A2AServer):
                 mutations_enabled(),
             )
         else:
-            logger.info(
-                "LLM disabled — heuristics only (mutations=%s)",
-                mutations_enabled(),
-            )
+            reason = getattr(self.llm, "disabled_reason", "") or "unknown"
+            if reason in (
+                "jwt_incompatible_with_openai",
+                "freddy_jwt_incompatible_with_openai",
+            ):
+                logger.info(
+                    "LLM disabled — Cloudverse JWT cannot use api.openai.com; "
+                    "set CLOUDVERSE_BASE_URL (heuristics only, mutations=%s).",
+                    mutations_enabled(),
+                )
+            elif reason == "cloudverse_base_url_missing":
+                logger.info(
+                    "LLM disabled — set CLOUDVERSE_BASE_URL for Cloudverse JWT "
+                    "(heuristics only, mutations=%s).",
+                    mutations_enabled(),
+                )
+            else:
+                logger.info(
+                    "LLM disabled — heuristics only (reason=%s, mutations=%s)",
+                    reason,
+                    mutations_enabled(),
+                )
 
     async def process_task(self, task: Task) -> Task:
         query = task.message.get_text() if task.message else ""

@@ -1,0 +1,21 @@
+Subject:
+ 🔴 Test KubePodCrashLooping — n8n-prod
+current_value:7596
+hostname:fw-noc
+product:Freshdesk
+alertname:KubePodCrashLooping
+alert_type:app
+region:us-east-1
+status:firing
+cluster:n8n-prod
+summary:RPM is high - NOC test - test-crashloop
+priority:p0
+severity:critical
+namespace:a2a-ops
+threshold:6500
+alert_sre_attributes:test-crashloop
+notification_channel:C0B7R75EQ8K
+source:trigmetry
+oncall:yes
+
+@NOC Handover investigate

@@ -47,6 +47,9 @@ spec:
             - secretRef:
                 name: prometheus-agent-config
                 optional: true
+            - secretRef:
+                name: kubernetes-agent-llm
+                optional: true
           env:
             - name: A2A_PORT
               value: "8080"
@@ -56,9 +59,15 @@ spec:
               value: "1"
             - name: LOG_LEVEL
               value: "INFO"
-            # Fallback if secret not created yet (override via create-prometheus-secret.sh)
+            - name: PROMETHEUS_COMPACT_SLACK
+              value: "true"
+            - name: PROMETHEUS_LLM_PROMQL
+              value: "true"
+            - name: LLM_ENABLED
+              value: "true"
+            # Override via prometheus-agent-config secret (sync-prometheus-haystack-secret.sh)
             - name: PROMETHEUS_URL
-              value: "https://metrics.haystack.es"
+              value: "http://vpce-0da3bda96a81ffc92-829begfe.vpce-svc-0680c3e2a8c08eb7c.us-east-1.vpce.amazonaws.com:10001/api/prom"
           volumeMounts:
             - name: source
               mountPath: /src

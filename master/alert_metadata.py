@@ -24,7 +24,9 @@ _EXTRA_FIELD_KEYS = frozenset(
 )
 
 # All keys owned by alert serialization (exclude from extra_metadata passthrough)
-_ALERT_METADATA_KEYS = _CONTEXT_FIELDS | _EXTRA_FIELD_KEYS | frozenset({"pod", "hostname"})
+_ALERT_METADATA_KEYS = _CONTEXT_FIELDS | _EXTRA_FIELD_KEYS | frozenset(
+    {"pod", "hostname", "haystack_tenant"}
+)
 
 
 def alert_to_metadata(alert: AlertContext) -> dict[str, Any]:

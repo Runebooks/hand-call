@@ -53,10 +53,12 @@ spec:
               command:
                 - /bin/sh
                 - -c
-                - pgrep -f 'master.slack_bot' >/dev/null
-            initialDelaySeconds: 45
+                # python:slim has no pgrep; PID 1 is master.slack_bot after exec
+                - kill -0 1
+            initialDelaySeconds: 90
             periodSeconds: 30
-            failureThreshold: 3
+            failureThreshold: 5
+            timeoutSeconds: 5
           resources:
             requests:
               cpu: 100m

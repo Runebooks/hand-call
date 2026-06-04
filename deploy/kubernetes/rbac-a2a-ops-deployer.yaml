@@ -1,0 +1,39 @@
+# Grant a developer deploy rights in a2a-ops (ConfigMaps, Secrets, Deployments).
+# Apply by cluster admin:
+#   kubectl apply -f deploy/kubernetes/rbac-a2a-ops-deployer.yaml
+#
+# Edit subjects[0].name to your SSO user or bind a Google Group.
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: a2a-ops-deployer
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/part-of: a2a-ops
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "pods", "pods/log", "services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: a2a-ops-deployer-smahendran
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/part-of: a2a-ops
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: a2a-ops-deployer
+subjects:
+  - kind: User
+    name: smahendran@freshworks.com
+    apiGroup: rbac.authorization.k8s.io

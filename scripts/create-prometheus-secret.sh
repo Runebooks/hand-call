@@ -26,6 +26,7 @@ kubectl create secret generic prometheus-agent-config \
   --namespace="${NAMESPACE}" \
   --from-literal=PROMETHEUS_URL="${PROMETHEUS_URL}" \
   --from-literal=PROMETHEUS_TOKEN="${PROMETHEUS_TOKEN:-}" \
+  --from-literal=PROMETHEUS_ORG_ID="${PROMETHEUS_ORG_ID:-}" \
   --from-literal=PROMETHEUS_VERIFY_SSL="${PROMETHEUS_VERIFY_SSL:-true}" \
   --from-literal=PROMETHEUS_INTERNAL="${PROMETHEUS_INTERNAL:-false}" \
   --from-literal=PROMQL_HOSTNAME_QUERY="${PROMQL_HOSTNAME_QUERY:-}" \

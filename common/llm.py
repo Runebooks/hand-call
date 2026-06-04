@@ -1,12 +1,14 @@
 """
-OpenAI LLM client for natural-language → structured intent parsing.
+OpenAI-compatible LLM client for natural-language → structured intent parsing.
 
 Configure via environment (never commit secrets):
-  OPENAI_API_KEY    — API key (sk-...)
-  OPENAI_MODEL      — default: gpt-5.5
+  OPENAI_API_KEY        — OpenAI sk-... OR Cloudverse / Freddy JWT (eyJ...)
+  OPENAI_AUTH_MODE      — auto | openai | cloudverse (default: auto)
+  OPENAI_MODEL          — default: gpt-5.5
+  CLOUDVERSE_BASE_URL   — Cloudverse gateway, e.g. https://<host>/v1 (JWT only)
+  OPENAI_BASE_URL       — overrides base URL (use CLOUDVERSE_BASE_URL for JWT)
   OPENAI_REASONING_EFFORT — optional: none, low, medium, high (default: none)
-  OPENAI_BASE_URL   — default: https://api.openai.com/v1
-  LLM_ENABLED       — default: true when API key is set
+  LLM_ENABLED           — default: true when API key + compatible base URL are set
 """
 
 from __future__ import annotations
@@ -22,7 +24,56 @@ import httpx
 logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-5.5"
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+
+JWT_INCOMPATIBLE_HINT = (
+    "OPENAI_API_KEY is a Cloudverse / Freddy JWT (eyJ...). It cannot call "
+    "https://api.openai.com. Set CLOUDVERSE_BASE_URL (or OPENAI_BASE_URL) to your "
+    "org's Cloudverse OpenAI-compatible gateway, e.g. from the Cloudverse playground "
+    "or internal docs. Heuristic intent parsing remains enabled."
+)
+
+
+def is_jwt_token(api_key: str) -> bool:
+    key = (api_key or "").strip()
+    return key.count(".") == 2 and key.startswith("eyJ")
+
+
+def is_public_openai_base(base_url: str) -> bool:
+    base = (base_url or "").lower()
+    return "api.openai.com" in base
+
+
+def auth_mode() -> str:
+    mode = (os.environ.get("OPENAI_AUTH_MODE") or "auto").strip().lower()
+    if mode in ("openai", "cloudverse", "auto"):
+        return mode
+    return "auto"
+
+
+def resolve_base_url(explicit: Optional[str] = None) -> str:
+    if explicit:
+        return explicit.rstrip("/")
+    cloudverse = (os.environ.get("CLOUDVERSE_BASE_URL") or "").strip()
+    openai_base = (os.environ.get("OPENAI_BASE_URL") or "").strip()
+    if cloudverse:
+        return cloudverse.rstrip("/")
+    if openai_base:
+        return openai_base.rstrip("/")
+    if auth_mode() == "cloudverse":
+        return ""
+    return DEFAULT_OPENAI_BASE_URL
+
+
+def jwt_incompatible_base(api_key: str, base_url: str) -> bool:
+    """JWT + public OpenAI always fails with 401 invalid issuer."""
+    if os.environ.get("LLM_ALLOW_JWT", "").lower() in ("1", "true", "yes"):
+        return False
+    if not is_jwt_token(api_key):
+        return False
+    if not base_url:
+        return auth_mode() != "cloudverse"
+    return is_public_openai_base(base_url)
 
 
 class OpenAIClient:
@@ -36,19 +87,51 @@ class OpenAIClient:
         model: Optional[str] = None,
         base_url: Optional[str] = None,
     ):
-        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "").strip()
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENAI_API_KEY_SK", "").strip()
+            or os.environ.get("OPENAI_API_KEY", "").strip()
+        )
         self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
-        self.base_url = (
-            base_url or os.environ.get("OPENAI_BASE_URL", DEFAULT_BASE_URL)
-        ).rstrip("/")
+        self.base_url = resolve_base_url(base_url)
+        self._auth_mode = self._detect_auth_mode()
+
+    def _detect_auth_mode(self) -> str:
+        mode = auth_mode()
+        if mode != "auto":
+            return mode
+        if is_jwt_token(self.api_key):
+            return "cloudverse"
+        if self.api_key.startswith("sk-"):
+            return "openai"
+        return "openai"
 
     def enabled(self) -> bool:
         flag = os.environ.get("LLM_ENABLED", "").strip().lower()
         if flag in ("0", "false", "no", "off"):
             return False
+        if not self.api_key:
+            return False
+        if jwt_incompatible_base(self.api_key, self.base_url):
+            return False
+        if self._auth_mode == "cloudverse" and not self.base_url:
+            return False
         if flag in ("1", "true", "yes", "on"):
-            return bool(self.api_key)
-        return bool(self.api_key)
+            return True
+        return True
+
+    @property
+    def disabled_reason(self) -> str:
+        if not self.api_key:
+            return "OPENAI_API_KEY not set"
+        if self._auth_mode == "cloudverse" and not self.base_url:
+            return "cloudverse_base_url_missing"
+        if jwt_incompatible_base(self.api_key, self.base_url):
+            return "jwt_incompatible_with_openai"
+        flag = os.environ.get("LLM_ENABLED", "").strip().lower()
+        if flag in ("0", "false", "no", "off"):
+            return "LLM_ENABLED=false"
+        return ""
 
     def _headers(self) -> dict[str, str]:
         return {
@@ -62,19 +145,31 @@ class OpenAIClient:
         user: str,
         max_tokens: int = 512,
     ) -> dict[str, Any]:
-        """Call OpenAI and parse a JSON object from the response."""
+        """Call OpenAI-compatible API and parse a JSON object from the response."""
+        if not self.enabled():
+            reason = self.disabled_reason
+            if reason == "jwt_incompatible_with_openai":
+                raise RuntimeError(JWT_INCOMPATIBLE_HINT)
+            if reason == "cloudverse_base_url_missing":
+                raise RuntimeError(
+                    "CLOUDVERSE_BASE_URL is not set. Add your org's Cloudverse "
+                    "OpenAI-compatible base URL (…/v1) to .env.local."
+                )
+            raise RuntimeError("LLM is disabled (OPENAI_API_KEY / LLM_ENABLED / base URL)")
         if not self.api_key:
             raise RuntimeError("OPENAI_API_KEY is not set")
 
         payload: dict[str, Any] = {
             "model": self.model,
             "max_tokens": max_tokens,
-            "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
         }
+        # Cloudverse gateway may not support OpenAI response_format yet.
+        if self._auth_mode != "cloudverse":
+            payload["response_format"] = {"type": "json_object"}
         reasoning = os.environ.get("OPENAI_REASONING_EFFORT", "none").strip()
         if reasoning and self.model.startswith("gpt-5"):
             payload["reasoning_effort"] = reasoning
@@ -84,7 +179,7 @@ class OpenAIClient:
             response = client.post(url, headers=self._headers(), json=payload)
             if response.status_code >= 400:
                 raise RuntimeError(
-                    f"OpenAI API error {response.status_code}: {response.text[:500]}"
+                    f"LLM API error {response.status_code}: {response.text[:500]}"
                 )
             data = response.json()
 
@@ -99,7 +194,7 @@ LLMClient = OpenAIClient
 def _extract_openai_text(data: dict[str, Any]) -> str:
     choices = data.get("choices") or []
     if not choices:
-        raise RuntimeError("OpenAI returned no choices")
+        raise RuntimeError("LLM returned no choices")
     message = choices[0].get("message") or {}
     return (message.get("content") or "").strip()
 

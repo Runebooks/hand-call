@@ -21,9 +21,10 @@ _USER_K8S = re.compile(
 )
 _USER_PROM = re.compile(
     r"\b(rpm|metric|metrics|prometheus|promql|current.?value|threshold|latency|"
-    r"cpu|memory|haystack|dashboard|spike|rate|trigmetry)\b",
+    r"cpu|memory|haystack|dashboard|spike|rate|trigmetry|fetch|current)\b",
     re.I,
 )
+_EXPLICIT_PROMQL = re.compile(r"(?:promql|query)\s*[:=]", re.I)
 
 # Alertname → preferred agent (Layer 1)
 _ALERTNAME_AGENT: dict[str, str] = {
@@ -71,7 +72,7 @@ class AgentRouter:
             logger.info("Route L1 metrics-alert → %s", chosen.name)
             return chosen
 
-        chosen = self._route_alertname(alert, agents)
+        chosen = self._route_alertname(query, alert, agents)
         if chosen:
             logger.info("Route L2 alertname → %s", chosen.name)
             return chosen
@@ -112,8 +113,13 @@ class AgentRouter:
         user = self._user_question(query)
         if not user:
             return None
-        prom_hits = len(_USER_PROM.findall(user))
-        k8s_hits = len(_USER_K8S.findall(user))
+        if _EXPLICIT_PROMQL.search(user) and "prometheus-agent" in agents:
+            logger.debug("User-intent explicit promql → prometheus-agent")
+            return agents["prometheus-agent"]
+        # Do not treat label names inside PromQL (e.g. namespace=) as k8s intent
+        intent_text = _EXPLICIT_PROMQL.sub("", user).strip() or user
+        prom_hits = len(_USER_PROM.findall(intent_text))
+        k8s_hits = len(_USER_K8S.findall(intent_text))
         logger.debug(
             "User-intent scores prom=%s k8s=%s question=%r",
             prom_hits,
@@ -125,7 +131,7 @@ class AgentRouter:
             return agents["prometheus-agent"]
         if k8s_hits and prom_hits == 0 and "kubernetes-agent" in agents:
             return agents["kubernetes-agent"]
-        if prom_hits > k8s_hits and "prometheus-agent" in agents:
+        if prom_hits >= k8s_hits and prom_hits > 0 and "prometheus-agent" in agents:
             return agents["prometheus-agent"]
         if k8s_hits > prom_hits and "kubernetes-agent" in agents:
             return agents["kubernetes-agent"]
@@ -144,10 +150,19 @@ class AgentRouter:
         return None
 
     def _route_alertname(
-        self, alert: Optional[AlertContext], agents: dict[str, RegisteredAgent]
+        self,
+        query: str,
+        alert: Optional[AlertContext],
+        agents: dict[str, RegisteredAgent],
     ) -> Optional[RegisteredAgent]:
         if not alert or not alert.alertname:
             return None
+        user = self._user_question(query)
+        if user and _USER_PROM.search(user) and "prometheus-agent" in agents:
+            if not _EXPLICIT_PROMQL.search(user) or _USER_PROM.search(
+                _EXPLICIT_PROMQL.sub("", user)
+            ):
+                return agents["prometheus-agent"]
         name = _ALERTNAME_AGENT.get(alert.alertname)
         if not name and alert.alertname.startswith("Kube"):
             name = "kubernetes-agent"

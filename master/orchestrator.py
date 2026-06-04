@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from common.a2a_client import A2AClient
+from common.haystack_tenant import is_haystack_tenant, resolve_haystack_tenant
 from master.alert_parser import AlertContext, format_slack_reply
 from master.registry import AgentRegistry, RegisteredAgent
 from master.router import AgentRouter
@@ -51,13 +52,19 @@ class MasterOrchestrator:
         agent = self.router.route(query, alert)
         metadata: dict[str, Any] = {"source": "master", "routed_agent": agent.name}
         if alert:
+            pod = alert.pod_hint or alert.alert_sre_attributes or ""
+            if not pod and alert.hostname and not is_haystack_tenant(alert.hostname):
+                pod = alert.hostname
+            sre = alert.alert_sre_attributes or ""
+            if not sre and alert.hostname and not is_haystack_tenant(alert.hostname):
+                sre = alert.hostname
             metadata.update(
                 {
                     "alertname": alert.alertname,
                     "namespace": alert.namespace,
                     "cluster": alert.cluster,
-                    "pod": alert.pod_hint or alert.alert_sre_attributes or alert.hostname,
-                    "alert_sre_attributes": alert.alert_sre_attributes or alert.hostname,
+                    "pod": pod,
+                    "alert_sre_attributes": sre,
                     "hostname": alert.hostname,
                     "product": alert.product,
                     "current_value": alert.fields.get("current_value", ""),
@@ -69,6 +76,7 @@ class MasterOrchestrator:
                     "region": alert.region,
                 }
             )
+            metadata["haystack_tenant"] = resolve_haystack_tenant(metadata)
         if extra_metadata:
             metadata.update(extra_metadata)
 
