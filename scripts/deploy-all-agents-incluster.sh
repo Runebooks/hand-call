@@ -6,7 +6,7 @@ NAMESPACE="${NAMESPACE:-a2a-ops}"
 
 echo "==> Shared source ConfigMap"
 ARCHIVE="$(mktemp -t a2a-agents-src.XXXXXX.tar.gz)"
-tar -czf "${ARCHIVE}" -C "${ROOT}" common agents master requirements.txt
+COPYFILE_DISABLE=1 tar -czf "${ARCHIVE}" -C "${ROOT}" common agents master requirements.txt
 kubectl create configmap a2a-agents-source \
   --namespace="${NAMESPACE}" \
   --from-file=agent-src.tar.gz="${ARCHIVE}" \
@@ -16,6 +16,9 @@ kubectl create configmap kubernetes-agent-source \
   --from-file=agent-src.tar.gz="${ARCHIVE}" \
   --dry-run=client -o yaml | kubectl apply -f -
 rm -f "${ARCHIVE}"
+
+echo "==> Rollout restart (pick up ConfigMap source)"
+kubectl rollout restart deployment/kubernetes-agent deployment/prometheus-agent deployment/rds-agent deployment/master-agent -n "${NAMESPACE}"
 
 echo "==> RBAC + K8s agent"
 kubectl apply -f "${ROOT}/deploy/kubernetes/rbac.yaml"
@@ -35,7 +38,8 @@ kubectl rollout status deployment/master-agent -n "${NAMESPACE}" --timeout=180s
 
 echo ""
 echo "Agents (in cluster):"
-echo "  prometheus-agent:8080  rds-agent:8081  kubernetes-agent:8082"
+echo "  prometheus-agent:8080  rds-agent:8081  kubernetes-agent:8082  master-agent:8095"
 echo ""
-echo "Set on slack-bot:"
-echo "  MASTER_AGENT_URL=http://master-agent.${NAMESPACE}.svc.cluster.local:8095"
+echo "Production Slack bot (in cluster, no local scripts):"
+echo "  ./scripts/create-slack-secret.sh && ./scripts/deploy-slack-bot-incluster.sh"
+echo "  Or full stack: ./scripts/deploy-production-incluster.sh"

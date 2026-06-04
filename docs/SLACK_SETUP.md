@@ -1,17 +1,49 @@
 # NOC handover bot — Slack setup checklist
 
-## Recommended: n8n (not Socket Mode)
+## Production (recommended): everything in cluster
 
-Production flow:
+No local `run-slack-bot-local.sh` or port-forward needed. Slack Socket Mode connects **outbound** from the `slack-bot` pod to Slack — **Ingress is not required** for @mentions.
+
+```bash
+# 1. Secrets from .env.local (once)
+./scripts/create-llm-secret.sh
+./scripts/create-slack-secret.sh
+
+# 2. Deploy full stack into a2a-ops
+./scripts/deploy-production-incluster.sh
+
+# 3. Stop local duplicates on your laptop (important!)
+pkill -f 'master.slack_bot|master.server|agents.kubernetes.server' || true
+
+# 4. Verify
+kubectl get pods -n a2a-ops
+kubectl logs -n a2a-ops -l app.kubernetes.io/name=slack-bot --tail=30
+```
+
+After `@NOC Handover` in Slack, master logs should show `POST /` and `Master routing → kubernetes-agent` (not only `GET /health`).
+
+**Optional Ingress** — only if n8n or external systems call the webhook API from outside the cluster:
+
+```bash
+# Edit host/TLS in deploy/kubernetes/ingress-webhook.yaml first
+./scripts/deploy-webhook-api-incluster.sh
+./scripts/deploy-production-incluster.sh --with-ingress
+```
+
+---
+
+## Recommended: n8n (alternative to Socket Mode)
+
+Production flow without Socket Mode:
 
 1. User **@NOC Handover** in the alert thread  
 2. **n8n** Slack trigger / workflow receives the event  
-3. n8n **HTTP POST** → `http://a2a-webhook-api.a2a-ops.svc.cluster.local:8090/investigate`  
+3. n8n **HTTP POST** → webhook API (ClusterIP or Ingress)  
 4. Response `slack_text` → n8n posts back in the same thread  
 
 See **[N8N_INTEGRATION.md](./N8N_INTEGRATION.md)**. Deploy API: `./scripts/deploy-webhook-api-incluster.sh`.
 
-The sections below apply only if you run **`master/slack_bot.py`** (Socket Mode) instead of n8n.
+The sections below apply if you run **`master/slack_bot.py` locally** (dev only) or need Slack app configuration details.
 
 ---
 

@@ -79,6 +79,11 @@ class MasterAgentClient:
         answer = self._a2a_client().get_answer_text(task)
         meta = task.metadata or {}
 
+        if not answer and task.status.message:
+            answer = f"**Investigation failed** — {task.status.message}"
+        if not answer and task.status.state.value == "failed":
+            answer = "**Investigation failed** — master-agent returned no details."
+
         agent_name = meta.get("routed_agent", "unknown")
         agent_url = meta.get("routed_agent_url", "")
         card_desc = meta.get("routed_agent_description", "")

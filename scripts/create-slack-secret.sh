@@ -29,7 +29,6 @@ kubectl create secret generic slack-bot-secrets \
   --from-literal=SLACK_SIGNING_SECRET="${SLACK_SIGNING_SECRET:-}" \
   --from-literal=SLACK_ALERT_CHANNEL_IDS="${SLACK_ALERT_CHANNEL_IDS:-}" \
   --from-literal=SLACK_TRIGGER_MODE="${SLACK_TRIGGER_MODE:-mention}" \
-  --from-literal=K8S_ALERT_NAMES="${K8S_ALERT_NAMES:-KubePodCrashLooping}" \
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "Secret slack-bot-secrets updated in namespace ${NAMESPACE}"

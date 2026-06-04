@@ -1,3 +1,6 @@
+# Slack bot — production (Socket Mode).
+# Connects OUTBOUND to Slack; no Ingress required.
+# Routes investigations to in-cluster master-agent via ClusterIP.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,7 +20,8 @@ spec:
         app.kubernetes.io/name: slack-bot
         app.kubernetes.io/part-of: a2a-ops
     spec:
-      serviceAccountName: kubernetes-agent
+      # No Kubernetes API access needed — do not use kubernetes-agent SA.
+      automountServiceAccountToken: false
       containers:
         - name: slack-bot
           image: python:3.11-slim-bookworm
@@ -44,6 +48,15 @@ spec:
           volumeMounts:
             - name: source
               mountPath: /src
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - pgrep -f 'master.slack_bot' >/dev/null
+            initialDelaySeconds: 45
+            periodSeconds: 30
+            failureThreshold: 3
           resources:
             requests:
               cpu: 100m

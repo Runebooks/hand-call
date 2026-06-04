@@ -8,10 +8,22 @@ import re
 from typing import Optional
 
 from common.llm import LLMClient
-from master.alert_parser import AlertContext, K8S_ALERT_HANDLERS
+from master.alert_parser import AlertContext, K8S_ALERT_HANDLERS, is_metrics_alert
 from master.registry import AgentRegistry, RegisteredAgent
 
 logger = logging.getLogger(__name__)
+
+# Layer 0 — user question intent (beats alertname for follow-ups)
+_USER_K8S = re.compile(
+    r"\b(pod|pods|crash|crashloop|crashloopbackoff|restarting|log|logs|deployment|"
+    r"replica|restart|scale|delete|namespace|kube|k8s|container)\b",
+    re.I,
+)
+_USER_PROM = re.compile(
+    r"\b(rpm|metric|metrics|prometheus|promql|current.?value|threshold|latency|"
+    r"cpu|memory|haystack|dashboard|spike|rate|trigmetry)\b",
+    re.I,
+)
 
 # Alertname → preferred agent (Layer 1)
 _ALERTNAME_AGENT: dict[str, str] = {
@@ -49,14 +61,24 @@ class AgentRouter:
                 "No agents registered. Set AGENT_URLS or start specialist agents."
             )
 
+        chosen = self._route_user_intent(query, agents)
+        if chosen:
+            logger.info("Route L0 user-intent → %s", chosen.name)
+            return chosen
+
+        chosen = self._route_metrics_alert(alert, agents)
+        if chosen:
+            logger.info("Route L1 metrics-alert → %s", chosen.name)
+            return chosen
+
         chosen = self._route_alertname(alert, agents)
         if chosen:
-            logger.info("Route L1 alertname → %s", chosen.name)
+            logger.info("Route L2 alertname → %s", chosen.name)
             return chosen
 
         chosen = self._route_keywords(query, agents)
         if chosen:
-            logger.info("Route L2 keywords → %s", chosen.name)
+            logger.info("Route L3 keywords → %s", chosen.name)
             return chosen
 
         if self.llm.enabled() and os.environ.get("ENABLE_LLM_ROUTING", "true").lower() not in (
@@ -66,7 +88,7 @@ class AgentRouter:
         ):
             chosen = self._route_llm(query, agents, alert)
             if chosen:
-                logger.info("Route L3 LLM → %s", chosen.name)
+                logger.info("Route L4 LLM → %s", chosen.name)
                 return chosen
 
         # Default: K8s for NOC Kube alerts, else first agent
@@ -75,6 +97,51 @@ class AgentRouter:
             if chosen:
                 return chosen
         return next(iter(agents.values()))
+
+    @staticmethod
+    def _user_question(query: str) -> str:
+        marker = "\n\nKubernetes context:"
+        if marker in query:
+            return query.split(marker, 1)[0].strip()
+        return query.strip()
+
+    def _route_user_intent(
+        self, query: str, agents: dict[str, RegisteredAgent]
+    ) -> Optional[RegisteredAgent]:
+        """Follow-up questions: 'why crashing' → k8s, 'what is RPM' → prometheus."""
+        user = self._user_question(query)
+        if not user:
+            return None
+        prom_hits = len(_USER_PROM.findall(user))
+        k8s_hits = len(_USER_K8S.findall(user))
+        logger.debug(
+            "User-intent scores prom=%s k8s=%s question=%r",
+            prom_hits,
+            k8s_hits,
+            user[:120],
+        )
+        # Metric/RPM questions always win unless user explicitly asks k8s ops
+        if prom_hits and k8s_hits == 0 and "prometheus-agent" in agents:
+            return agents["prometheus-agent"]
+        if k8s_hits and prom_hits == 0 and "kubernetes-agent" in agents:
+            return agents["kubernetes-agent"]
+        if prom_hits > k8s_hits and "prometheus-agent" in agents:
+            return agents["prometheus-agent"]
+        if k8s_hits > prom_hits and "kubernetes-agent" in agents:
+            return agents["kubernetes-agent"]
+        return None
+
+    def _route_metrics_alert(
+        self, alert: Optional[AlertContext], agents: dict[str, RegisteredAgent]
+    ) -> Optional[RegisteredAgent]:
+        """Pure Trigmetry metric alerts without a Kubernetes pod target."""
+        if not alert or not is_metrics_alert(alert):
+            return None
+        if alert.pod_hint or (alert.namespace and alert.alert_sre_attributes):
+            return None
+        if "prometheus-agent" in agents:
+            return agents["prometheus-agent"]
+        return None
 
     def _route_alertname(
         self, alert: Optional[AlertContext], agents: dict[str, RegisteredAgent]

@@ -1,0 +1,37 @@
+# Optional — expose a2a-webhook-api for n8n or external HTTP callers.
+# Slack Socket Mode (slack-bot) does NOT use Ingress; it connects outbound to Slack.
+#
+# Before apply:
+#   1. Replace a2a-webhook.example.com with your hostname
+#   2. Create TLS secret or use cert-manager
+#   3. Deploy webhook API: ./scripts/deploy-webhook-api-incluster.sh
+#   4. kubectl apply -f deploy/kubernetes/ingress-webhook.yaml
+#
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: a2a-webhook-api
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: a2a-webhook-api
+    app.kubernetes.io/part-of: a2a-ops
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+    nginx.ingress.kubernetes.io/proxy-body-size: "2m"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - a2a-webhook.example.com
+      secretName: a2a-webhook-tls
+  rules:
+    - host: a2a-webhook.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: a2a-webhook-api
+                port:
+                  number: 8090

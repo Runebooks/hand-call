@@ -32,9 +32,11 @@ slack-bot (thin client — thread parse only)
   K8s agent uses LLM for intent parsing on complex natural-language queries.
 ```
 
-**Local:** `./scripts/run-all-agents-local.sh` → `./scripts/run-master-agent-local.sh` → `./scripts/run-slack-bot-local.sh`
+**Cluster (production):** `./scripts/deploy-production-incluster.sh` — agents + master + slack-bot in `a2a-ops` (no local processes).
 
-**Cluster:** `./scripts/deploy-all-agents-incluster.sh` (includes master-agent pod)
+**Cluster (agents only):** `./scripts/deploy-all-agents-incluster.sh` then `./scripts/deploy-slack-bot-incluster.sh`
+
+**Local dev only:** `./scripts/run-all-agents-local.sh` → `./scripts/run-master-agent-local.sh` → `./scripts/restart-slack-bot.sh`
 
 ### Entry points (pick one)
 

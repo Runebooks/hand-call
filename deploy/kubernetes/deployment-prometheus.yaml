@@ -33,6 +33,7 @@ spec:
       containers:
         - name: agent
           image: python:3.11-slim-bookworm
+          imagePullPolicy: IfNotPresent
           workingDir: /app
           command: ["/bin/bash", "-ec"]
           args:
@@ -42,11 +43,22 @@ spec:
               exec python -m agents.prometheus.server
           ports:
             - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: prometheus-agent-config
+                optional: true
           env:
             - name: A2A_PORT
               value: "8080"
+            - name: A2A_HOST
+              value: "0.0.0.0"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            - name: LOG_LEVEL
+              value: "INFO"
+            # Fallback if secret not created yet (override via create-prometheus-secret.sh)
             - name: PROMETHEUS_URL
-              value: ""
+              value: "https://metrics.haystack.es"
           volumeMounts:
             - name: source
               mountPath: /src

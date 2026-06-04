@@ -59,6 +59,14 @@ class MasterOrchestrator:
                     "pod": alert.pod_hint or alert.alert_sre_attributes or alert.hostname,
                     "alert_sre_attributes": alert.alert_sre_attributes or alert.hostname,
                     "hostname": alert.hostname,
+                    "product": alert.product,
+                    "current_value": alert.fields.get("current_value", ""),
+                    "threshold": alert.fields.get("threshold", ""),
+                    "summary": alert.summary or alert.fields.get("summary", ""),
+                    "dashboard": alert.dashboard,
+                    "severity": alert.severity,
+                    "priority": alert.priority,
+                    "region": alert.region,
                 }
             )
         if extra_metadata:

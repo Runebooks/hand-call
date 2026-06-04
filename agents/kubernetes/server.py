@@ -327,7 +327,9 @@ class KubernetesAgent(A2AServer):
         if _wants_problem_pods(lowered):
             if name_hint and _wants_crash_diagnosis(lowered):
                 detail = self._handle_pods(namespace, name_hint)
-                logs = self._handle_logs(query, namespace, name_hint, tail=50)
+                logs = self._handle_logs(
+                    query, namespace, name_hint, tail=50, previous=True
+                )
                 return f"{detail}\n\n{logs}"
             return self._handle_problem_pods(namespace, name_hint)
         return self._handle_pods(namespace, name_hint)
@@ -395,6 +397,11 @@ class KubernetesAgent(A2AServer):
         if intent.action == "events":
             return self._handle_events(ns, pod)
         if intent.action == "problem_pods":
+            user = _user_question_text(query).lower()
+            if pod and _wants_crash_diagnosis(user):
+                detail = self._handle_pods(ns, pod)
+                logs = self._handle_logs(query, ns, pod, tail=50, previous=True)
+                return f"{detail}\n\n{logs}"
             return self._handle_problem_pods(ns, pod)
         if intent.action == "list_pods" and intent.deployment:
             return self._handle_deployment_pods(ns, intent.deployment)

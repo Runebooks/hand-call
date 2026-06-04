@@ -71,6 +71,12 @@ _INLINE_ALERT_KEYS = (
     "notification_channel",
     "source",
     "service",
+    "current_value",
+    "threshold",
+    "alert_type",
+    "summary",
+    "dashboard",
+    "dashboard1",
 )
 
 
@@ -272,6 +278,22 @@ def is_k8s_alertname(name: str) -> bool:
         "imagepull",
     )
     return any(token in lower for token in k8s_tokens)
+
+
+def is_metrics_alert(alert: Optional[AlertContext]) -> bool:
+    """Trigmetry/Haystack-style metric alert (RPM, threshold, app hostname)."""
+    if alert is None:
+        return False
+    fields = alert.fields or {}
+    if fields.get("current_value") or fields.get("threshold"):
+        return True
+    summary = (alert.summary or alert.raw_text or "").lower()
+    if re.search(r"\b(rpm|latency|cpu|memory|metric|threshold)\b", summary):
+        return True
+    alert_type = (fields.get("alert_type") or "").lower()
+    if alert_type == "app" and alert.hostname and not alert.pod_hint:
+        return True
+    return False
 
 
 def is_valid_k8s_alert(alert: Optional[AlertContext]) -> bool:
