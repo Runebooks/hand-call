@@ -290,8 +290,11 @@ def build_query(alert: AlertContext, user_prompt: str = "") -> str:
     prompt = (user_prompt or "").strip()
 
     if prompt:
+        from agents.kubernetes.intent import wants_namespace_pod_count
+
+        namespace_scope = wants_namespace_pod_count(prompt)
         ctx_parts: list[str] = []
-        if pod:
+        if pod and not namespace_scope:
             ctx_parts.append(f"pod/host `{pod}`")
         if ns:
             ctx_parts.append(f"namespace `{ns}`")
@@ -348,7 +351,11 @@ def run_investigation(
             extra_metadata={"source": "slack"},
         )
         reply = master.format_reply(alert, result, user_prompt=user_prompt)
+        reply, confirm = _split_confirm(reply)
+        reply, log_artifacts = _split_log_artifacts(reply)
     except Exception as exc:
+        log_artifacts = []
+        confirm = None
         logger.exception("Investigation failed")
         err = str(exc)
         if "Connection refused" in err or "ConnectError" in err:
@@ -365,4 +372,147 @@ def run_investigation(
                 + f": {exc}"
             )
 
-    client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=reply)
+    reply = _to_slack_mrkdwn(reply)
+    if confirm is not None:
+        _post_confirmation(client, channel=channel, thread_ts=thread_ts, text=reply)
+    else:
+        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=reply)
+    _upload_log_artifacts(client, channel=channel, thread_ts=thread_ts, artifacts=log_artifacts)
+
+
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+
+def _to_slack_mrkdwn(text: str) -> str:
+    """Convert Markdown ``**bold**`` to Slack mrkdwn ``*bold*``.
+
+    Slack renders ``**`` literally, so collapse it to single-asterisk bold and
+    drop any stray double-asterisks that remain.
+    """
+    if not text:
+        return text
+    converted = _BOLD_RE.sub(r"*\1*", text)
+    return converted.replace("**", "")
+
+
+def _split_confirm(reply: str) -> tuple[str, Optional[dict]]:
+    """Detect a mutation confirmation marker and strip it from the reply."""
+    try:
+        from agents.kubernetes.report import extract_confirm
+
+        return extract_confirm(reply)
+    except Exception:
+        return reply, None
+
+
+def _post_confirmation(
+    client: WebClient, *, channel: str, thread_ts: str, text: str
+) -> None:
+    """Post a confirmation prompt with Approve / Cancel buttons."""
+    body = (text or "").replace("**", "*")  # Slack mrkdwn bold
+    blocks = [
+        {"type": "section", "text": {"type": "mrkdwn", "text": body[:2900]}},
+        {
+            "type": "actions",
+            "block_id": "noc_confirm",
+            "elements": [
+                {
+                    "type": "button",
+                    "action_id": "noc_confirm_yes",
+                    "text": {"type": "plain_text", "text": "✅ Approve", "emoji": True},
+                    "style": "primary",
+                    "value": thread_ts,
+                },
+                {
+                    "type": "button",
+                    "action_id": "noc_confirm_no",
+                    "text": {"type": "plain_text", "text": "❌ Cancel", "emoji": True},
+                    "style": "danger",
+                    "value": thread_ts,
+                },
+            ],
+        },
+    ]
+    try:
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text="Confirmation required",
+            blocks=blocks,
+        )
+    except Exception as exc:
+        logger.warning("Confirmation buttons failed (%s); posting plain text", exc)
+        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text)
+
+
+def apply_confirmation_decision(
+    client: WebClient,
+    master: MasterAgentClient,
+    *,
+    channel: str,
+    thread_ts: str,
+    decision: str,
+    bot_user_id: str = "",
+) -> None:
+    """Apply an Approve/Cancel button click by replaying it as a yes/no follow-up.
+
+    Reuses the normal investigation path so the same session_id (Slack thread)
+    matches the agent's pending mutation and executes (or cancels) it.
+    """
+    alert, _combined, _hint = resolve_alert_from_thread(
+        client, channel, thread_ts, "", bot_user_id=bot_user_id
+    )
+    if alert is None:
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text="Could not resolve the original alert context to apply your decision.",
+        )
+        return
+    run_investigation(
+        client,
+        master,
+        channel=channel,
+        thread_ts=thread_ts,
+        alert=alert,
+        user_prompt=decision,
+    )
+
+
+def _split_log_artifacts(reply: str) -> tuple[str, list[tuple[str, str]]]:
+    """Pull long `noc-logs` blocks out of the reply for separate file upload."""
+    try:
+        from agents.kubernetes.report import extract_log_artifacts
+
+        return extract_log_artifacts(reply)
+    except Exception:
+        return reply, []
+
+
+def _upload_log_artifacts(
+    client: WebClient,
+    *,
+    channel: str,
+    thread_ts: str,
+    artifacts: list[tuple[str, str]],
+) -> None:
+    """Upload long logs as thread snippet files; fall back to a code block."""
+    for label, content in artifacts or []:
+        filename = f"{label}.log"
+        try:
+            client.files_upload_v2(
+                channel=channel,
+                thread_ts=thread_ts,
+                content=content,
+                filename=filename,
+                title=filename,
+                initial_comment=f":page_facing_up: Full logs — `{filename}`",
+            )
+        except Exception as exc:
+            logger.warning("Log file upload failed (%s); posting inline", exc)
+            snippet = content if len(content) <= 3500 else content[-3500:]
+            client.chat_postMessage(
+                channel=channel,
+                thread_ts=thread_ts,
+                text=f"*Full logs — `{filename}`*\n```\n{snippet}\n```",
+            )

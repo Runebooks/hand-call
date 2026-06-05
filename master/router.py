@@ -21,7 +21,9 @@ _USER_K8S = re.compile(
 )
 _USER_PROM = re.compile(
     r"\b(rpm|metric|metrics|prometheus|promql|current.?value|threshold|latency|"
-    r"cpu|memory|haystack|dashboard|spike|rate|trigmetry|fetch|current)\b",
+    r"cpu|memory|haystack|dashboard|spike|rate|trigmetry|fetch|current|"
+    r"targets?|scrape|scraped|exporter|series|alertmanager|firing)\b"
+    r"|up\s*==|up\s*\{|\bup\s*=\s*0\b",
     re.I,
 )
 _EXPLICIT_PROMQL = re.compile(r"(?:promql|query)\s*[:=]", re.I)
@@ -41,7 +43,7 @@ _ALERTNAME_AGENT.update(
 # Keywords → agent (Layer 2)
 _KEYWORD_AGENTS: list[tuple[str, str]] = [
     ("kubernetes-agent", r"\b(pod|pods|namespace|crashloop|deployment|kube|k8s|container)\b"),
-    ("prometheus-agent", r"\b(prometheus|promql|metric|metrics|rpm|latency|cpu|memory|haystack|dashboard)\b"),
+    ("prometheus-agent", r"\b(prometheus|promql|metric|metrics|rpm|latency|cpu|memory|haystack|dashboard|targets?|scrape|exporter|series|alertmanager|firing)\b|up\s*==|up\s*\{"),
     ("rds-agent", r"\b(rds|database|db|sql|postgres|mysql|slow\s+query|connection\s+pool)\b"),
 ]
 

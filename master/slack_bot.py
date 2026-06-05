@@ -38,6 +38,7 @@ from master.slack_api import PRIVATE_CHANNEL_BOT_EVENTS, PRIVATE_CHANNEL_BOT_SCO
 from master.master_client import MasterAgentClient
 from master.slack_thread import (
     BOT_VERSION,
+    apply_confirmation_decision,
     extract_user_prompt,
     resolve_alert_from_thread,
     run_investigation,
@@ -220,6 +221,56 @@ def create_app() -> App:
             alert=alert,
             user_prompt=user_prompt,
         )
+
+    def _apply_decision(body, client, decision: str) -> None:
+        container = body.get("container") or {}
+        channel = (body.get("channel") or {}).get("id") or container.get("channel_id") or ""
+        msg = body.get("message") or {}
+        thread_ts = (
+            msg.get("thread_ts")
+            or container.get("thread_ts")
+            or msg.get("ts")
+            or container.get("message_ts")
+            or ""
+        )
+        user = (body.get("user") or {}).get("id", "")
+        msg_ts = container.get("message_ts") or msg.get("ts")
+
+        label = ":white_check_mark: Approved" if decision == "yes" else ":x: Cancelled"
+        who = f" by <@{user}>" if user else ""
+        if msg_ts:
+            try:
+                client.chat_update(
+                    channel=channel,
+                    ts=msg_ts,
+                    text=f"{label}{who}",
+                    blocks=[
+                        {"type": "section", "text": {"type": "mrkdwn", "text": f"{label}{who}"}}
+                    ],
+                )
+            except Exception as exc:
+                logger.warning("Confirm message update failed: %s", exc)
+
+        if not _channel_ok(channel) or not thread_ts:
+            return
+        apply_confirmation_decision(
+            client,
+            master,
+            channel=channel,
+            thread_ts=thread_ts,
+            decision=decision,
+            bot_user_id=bot_user_id,
+        )
+
+    @app.action("noc_confirm_yes")
+    def handle_confirm_yes(ack, body, client):
+        ack()
+        _apply_decision(body, client, "yes")
+
+    @app.action("noc_confirm_no")
+    def handle_confirm_no(ack, body, client):
+        ack()
+        _apply_decision(body, client, "no")
 
     @app.event("app_mention")
     def handle_mention(event, client):

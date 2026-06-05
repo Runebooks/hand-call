@@ -65,6 +65,9 @@ def format_compact_response(
                 lines.append(f"- Query: `{promql}` → {n} series ({source})")
             else:
                 lines.append(f"- `{_short_query_name(promql)}` → {n} series")
+            if not _short_query_name(promql).startswith("kube_pod_"):
+                for value_line in _value_lines(promql, payload):
+                    lines.append(f"  ↳ {value_line}")
         if plan.note:
             lines.append(f"_{plan.note}_")
         if plan.source.startswith("llm"):
@@ -186,3 +189,35 @@ def _rpm_compact_lines(rpm_block: str) -> list[str]:
 def _short_query_name(promql: str) -> str:
     m = re.match(r"([a-zA-Z_:][a-zA-Z0-9_:]*)", promql)
     return m.group(1) if m else promql[:40]
+
+
+def _humanize_value(promql: str, val: float) -> str:
+    p = promql.lower()
+    if "_bytes" in p or "memory_working_set" in p or "memory_usage" in p:
+        for unit, div in (("GiB", 1024 ** 3), ("MiB", 1024 ** 2), ("KiB", 1024)):
+            if abs(val) >= div:
+                return f"{val / div:.2f} {unit}"
+        return f"{val:.0f} B"
+    if "cpu_usage_seconds" in p or "cpu_seconds" in p or "cpu_cores" in p:
+        return f"{val:.4f} cores (~{val * 1000:.1f} millicores)"
+    if val == int(val):
+        return f"{val:g}"
+    return f"{val:.4g}"
+
+
+def _value_lines(promql: str, payload: dict[str, Any], limit: int = 4) -> list[str]:
+    """Render the actual scalar value(s) of an instant query result."""
+    results = (payload.get("data") or {}).get("result") or []
+    lines: list[str] = []
+    for item in results[:limit]:
+        try:
+            val = float(item.get("value", [None, None])[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        metric = item.get("metric") or {}
+        label = metric.get("pod") or metric.get("instance") or metric.get("container") or ""
+        human = _humanize_value(promql, val)
+        lines.append(f"**{human}**" + (f" — `{label}`" if label and len(results) > 1 else ""))
+    if len(results) > limit:
+        lines.append(f"…and {len(results) - limit} more series")
+    return lines

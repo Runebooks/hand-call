@@ -95,6 +95,8 @@ class OpenAIClient:
         self.model = model or os.environ.get("OPENAI_MODEL", DEFAULT_MODEL)
         self.base_url = resolve_base_url(base_url)
         self._auth_mode = self._detect_auth_mode()
+        # None = unknown (probe on first tool call), True/False once observed.
+        self._supports_tools: Optional[bool] = None
 
     def _detect_auth_mode(self) -> str:
         mode = auth_mode()
@@ -185,6 +187,95 @@ class OpenAIClient:
 
         text = _extract_openai_text(data)
         return _parse_json_object(text)
+
+    @property
+    def supports_tools(self) -> Optional[bool]:
+        """None until probed, then True/False based on observed gateway behavior."""
+        return self._supports_tools
+
+    def chat(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: Optional[list[dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        max_tokens: int = 1024,
+        temperature: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Raw chat completion.
+
+        Returns the assistant `message` dict (may include `tool_calls`). When
+        `tools` are passed but the gateway rejects them, raises ToolsUnsupported
+        so the caller can fall back to a JSON planner loop.
+        """
+        if not self.enabled():
+            reason = self.disabled_reason
+            if reason == "jwt_incompatible_with_openai":
+                raise RuntimeError(JWT_INCOMPATIBLE_HINT)
+            if reason == "cloudverse_base_url_missing":
+                raise RuntimeError(
+                    "CLOUDVERSE_BASE_URL is not set. Add your org's Cloudverse "
+                    "OpenAI-compatible base URL (…/v1) to .env.local."
+                )
+            raise RuntimeError("LLM is disabled (OPENAI_API_KEY / LLM_ENABLED / base URL)")
+
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+        }
+        if temperature is not None:
+            payload["temperature"] = temperature
+        if tools:
+            payload["tools"] = tools
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
+        reasoning = os.environ.get("OPENAI_REASONING_EFFORT", "none").strip()
+        if reasoning and reasoning != "none" and self.model.startswith("gpt-5"):
+            payload["reasoning_effort"] = reasoning
+
+        url = f"{self.base_url}/chat/completions"
+        with httpx.Client(timeout=90.0) as client:
+            response = client.post(url, headers=self._headers(), json=payload)
+            if response.status_code >= 400:
+                body = response.text[:500]
+                if tools and _looks_like_tools_unsupported(response.status_code, body):
+                    self._supports_tools = False
+                    raise ToolsUnsupported(
+                        f"Gateway rejected tools ({response.status_code}): {body}"
+                    )
+                raise RuntimeError(f"LLM API error {response.status_code}: {body}")
+            data = response.json()
+
+        if tools:
+            self._supports_tools = True
+        choices = data.get("choices") or []
+        if not choices:
+            raise RuntimeError("LLM returned no choices")
+        return choices[0].get("message") or {}
+
+
+class ToolsUnsupported(RuntimeError):
+    """Raised when the configured gateway does not support OpenAI tool calling."""
+
+
+def _looks_like_tools_unsupported(status: int, body: str) -> bool:
+    text = (body or "").lower()
+    if status not in (400, 404, 422, 501):
+        return False
+    return any(
+        token in text
+        for token in (
+            "tool",
+            "function",
+            "tool_choice",
+            "not supported",
+            "unsupported",
+            "unrecognized",
+            "unknown field",
+            "invalid",
+        )
+    )
 
 
 # Alias used by the kubernetes agent

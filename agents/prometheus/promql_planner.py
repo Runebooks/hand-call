@@ -18,7 +18,7 @@ from common.llm import LLMClient
 
 logger = logging.getLogger(__name__)
 
-_PROMQL_SAFE = re.compile(r"^[a-zA-Z0-9_:,\{\}\.\s\-\+\*\/\(\)\[\]|=~?^$]+$")
+_PROMQL_SAFE = re.compile(r"""^[a-zA-Z0-9_:,\{\}\.\s\-\+\*\/\(\)\[\]|=!~?^$"']+$""")
 _MAX_PROMQL_LEN = 500
 
 
@@ -41,6 +41,11 @@ def _system_prompt() -> str:
         "- hostname=app-<digits> is a Freshdesk app id, NOT a Prom label — use pod/namespace/k8s_cluster_name.\n"
         "- For pod crash/RPM Kube alerts prefer kube_pod_container_status_waiting_reason, "
         "kube_pod_container_status_restarts_total, kube_pod_status_ready.\n"
+        "- CPU usage (cores): sum(rate(container_cpu_usage_seconds_total{...,container!=\"\"}[5m])) "
+        "by (pod). Memory: sum(container_memory_working_set_bytes{...,container!=\"\"}) by (pod). "
+        "Always add container!=\"\" to exclude the pod-level cgroup roll-up.\n"
+        "- Answer the user's QUESTION metric: if they ask CPU/memory of a named pod, query that "
+        "metric for that pod — do NOT substitute kube_pod_* health metrics.\n"
         "- Always include k8s_cluster_name when cluster is known.\n"
         "- Labels: pod, namespace, k8s_cluster_name, container, reason, condition.\n"
     )
@@ -181,15 +186,28 @@ def _probe_and_refine(
 ) -> PromqlPlan:
     if not prom or not prom.live_query_enabled:
         return plan
+    first = plan.queries[0]
     try:
         org = resolve_haystack_tenant(meta)
-        payload = prom.query(plan.queries[0], org_id=org)
+        payload = prom.query(first, org_id=org)
         n = len((payload.get("data") or {}).get("result") or [])
         if n > 0:
             return plan
-        logger.info("LLM/query probe returned 0 series for %s", plan.queries[0])
+        logger.info("LLM/query probe returned 0 series for %s", first)
     except Exception as exc:
         logger.warning("PromQL probe failed: %s", exc)
+
+    # Only fall back to pod-health metrics if the failing query was itself a
+    # health/up query. NEVER replace a CPU/memory/custom metric with kube_pod_*
+    # — that silently answers a different question than the user asked.
+    is_health_like = "kube_pod_" in first or first.strip().startswith("up")
+    if not is_health_like:
+        return PromqlPlan(
+            queries=plan.queries,
+            source=plan.source,
+            note="No series returned — the pod may not exist (check the current pod name) "
+            "or is not emitting this metric.",
+        )
 
     # Bad label combo (e.g. up{namespace=}) — fall back to focused pod queries
     if _label_selector(meta):

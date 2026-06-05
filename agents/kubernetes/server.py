@@ -28,6 +28,7 @@ from agents.kubernetes.intent import (
     parse_scale_replicas,
     wants_deployment_name_query,
     wants_deployment_pods,
+    wants_namespace_pod_count,
     wants_scale_mutation,
 )
 from agents.kubernetes.mutations import (
@@ -35,7 +36,9 @@ from agents.kubernetes.mutations import (
     execute_mutation,
     mutations_enabled,
 )
-from agents.kubernetes.pending import PENDING_STORE
+from agents.kubernetes.agent_loop import run_agent_loop, DEFAULT_MAX_STEPS
+from agents.kubernetes.report import confirm_marker
+from agents.kubernetes.pending import PENDING_STORE, PendingMutation
 from agents.kubernetes.kube_client import (
     KubeClient,
     PodSummary,
@@ -64,6 +67,11 @@ class KubernetesAgent(A2AServer):
         self.kube = KubeClient(context=os.environ.get("K8S_CONTEXT"))
         self.llm = LLMClient()
         self._last_route = "init"
+        self._agent_mode = os.environ.get("K8S_AGENT_MODE", "mcp").strip().lower()
+        try:
+            self._mcp_max_steps = int(os.environ.get("K8S_MCP_MAX_STEPS", str(DEFAULT_MAX_STEPS)))
+        except ValueError:
+            self._mcp_max_steps = DEFAULT_MAX_STEPS
 
     async def on_startup(self) -> None:
         self.kube.connect()
@@ -173,8 +181,18 @@ class KubernetesAgent(A2AServer):
                 return (
                     f"⚠️ **Pending confirmation**\n\n"
                     f"**Action:** {pending.summary}\n\n"
-                    f"Reply **yes** to proceed or **no** to cancel."
+                    f"Approve below, or reply **yes** to proceed / **no** to cancel."
+                    f"\n\n{confirm_marker(pending.operation, pending.summary)}"
                 )
+
+        if self._agent_mode == "mcp" and self.llm.enabled():
+            try:
+                return self._run_mcp_loop(
+                    query, namespace=namespace, pod=pod, session_id=session_id
+                )
+            except Exception as e:
+                logger.warning("MCP agent loop failed, falling back to intent: %s", e)
+                self._last_route = "heuristic (mcp-fallback)"
 
         if self.llm.enabled():
             try:
@@ -240,6 +258,53 @@ class KubernetesAgent(A2AServer):
             query, namespace=namespace, pod=pod, session_id=session_id
         )
 
+    def _run_mcp_loop(
+        self,
+        query: str,
+        *,
+        namespace: str | None,
+        pod: str | None,
+        session_id: str | None,
+    ) -> str:
+        """LLM brain + MCP tools: decide, fetch real data, synthesize answer."""
+        result = run_agent_loop(
+            query,
+            namespace=namespace,
+            pod=pod,
+            session_id=session_id,
+            kube=self.kube,
+            llm=self.llm,
+            max_steps=self._mcp_max_steps,
+        )
+        self._last_route = f"{result.route}/{self.llm.model}"
+        if result.pending is not None:
+            return self._confirm_pending(result.pending, session_id)
+        return result.answer
+
+    def _confirm_pending(self, pending: PendingMutation, session_id: str | None) -> str:
+        """Store a built mutation and return the Slack yes/no confirmation prompt."""
+        if not session_id:
+            return (
+                f"⚠️ **Confirmation required**\n\n"
+                f"**Action:** {pending.summary}\n\n"
+                f"Reply **yes** in this Slack thread to proceed or **no** to cancel."
+            )
+        PENDING_STORE.set(session_id, pending)
+        op_label = pending.operation.replace("_", " ")
+        dep_note = ""
+        if pending.deployment and pending.pod:
+            dep_note = (
+                f"\n_Inferred deployment `{pending.deployment}` from pod "
+                f"`{pending.pod}`._"
+            )
+        message = (
+            f"⚠️ **Confirm {op_label}**\n\n"
+            f"**Action:** {pending.summary}{dep_note}\n\n"
+            f"Approve below, or reply **yes** to proceed / **no** to cancel.\n\n"
+            f"_Staging cluster — mutation runs after confirmation._"
+        )
+        return f"{message}\n\n{confirm_marker(pending.operation, pending.summary)}"
+
     def _request_confirmation(
         self,
         intent: K8sIntent,
@@ -269,27 +334,7 @@ class KubernetesAgent(A2AServer):
         except ValueError as exc:
             return f"**Cannot prepare mutation** — {exc}"
 
-        if not session_id:
-            return (
-                f"⚠️ **Confirmation required**\n\n"
-                f"**Action:** {pending.summary}\n\n"
-                f"Reply **yes** in this Slack thread to proceed or **no** to cancel."
-            )
-
-        PENDING_STORE.set(session_id, pending)
-        op_label = pending.operation.replace("_", " ")
-        dep_note = ""
-        if pending.deployment and pending.pod:
-            dep_note = (
-                f"\n_Inferred deployment `{pending.deployment}` from pod "
-                f"`{pending.pod}`._"
-            )
-        return (
-            f"⚠️ **Confirm {op_label}**\n\n"
-            f"**Action:** {pending.summary}{dep_note}\n\n"
-            f"Reply **yes** to proceed or **no** to cancel.\n\n"
-            f"_Staging cluster — mutation runs after confirmation._"
-        )
+        return self._confirm_pending(pending, session_id)
 
     @staticmethod
     def _apply_metadata_hints(
@@ -324,6 +369,10 @@ class KubernetesAgent(A2AServer):
         name_hint = pod or parse_name_hint(query, namespace=namespace)
         if name_hint and namespace and name_hint.lower() == namespace.lower():
             name_hint = pod
+
+        if wants_namespace_pod_count(user_text):
+            ns = namespace or parse_namespace(query) or parse_namespace(user_text)
+            return self._handle_namespace_pod_summary(ns)
 
         if _wants_logs(lowered):
             return self._handle_logs(query, namespace, name_hint)
@@ -423,6 +472,9 @@ class KubernetesAgent(A2AServer):
             return self._handle_problem_pods(ns, pod)
         if intent.action == "list_pods" and intent.deployment:
             return self._handle_deployment_pods(ns, intent.deployment)
+        user = _user_question_text(query)
+        if wants_namespace_pod_count(user):
+            return self._handle_namespace_pod_summary(ns)
         return self._handle_pods(ns, pod)
 
     def _resolve_deployment_hint(
@@ -512,6 +564,28 @@ class KubernetesAgent(A2AServer):
         lines = [
             f"**Pods for deployment** `{namespace}/{deployment_name}` "
             f"(replicas {ready}, {len(pods)} pod(s) shown)\n",
+            self._format_pod_table(pods),
+        ]
+        return "\n".join(lines)
+
+    def _handle_namespace_pod_summary(self, namespace: str | None) -> str:
+        if not namespace:
+            return (
+                "Specify a namespace, e.g. "
+                "`how many pods are running in a2a-ops namespace`."
+            )
+        pods = self.kube.list_pods(namespace=namespace, limit=200)
+        if not pods:
+            return f"No pods found in namespace `{namespace}`."
+
+        running = [p for p in pods if _is_running_healthy(p)]
+        other = [p for p in pods if p not in running]
+        lines = [
+            f"**Pods in `{namespace}`**",
+            f"- **Total:** {len(pods)}",
+            f"- **Running (ready):** {len(running)}",
+            f"- **Not fully ready / unhealthy:** {len(other)}",
+            "",
             self._format_pod_table(pods),
         ]
         return "\n".join(lines)
@@ -755,6 +829,25 @@ class KubernetesAgent(A2AServer):
                 f'"logs for {pod.name} previous"_'
             )
         return "\n".join(lines)
+
+
+def _is_running_healthy(pod: PodSummary) -> bool:
+    match = re.match(r"(\d+)/(\d+)", pod.ready)
+    if not match or match.group(1) != match.group(2) or match.group(1) == "0":
+        return False
+    reason = (pod.reason or "").lower()
+    if reason in (
+        "crashloopbackoff",
+        "imagepullbackoff",
+        "errimagepull",
+        "createcontainerconfigerror",
+        "oomkilled",
+    ):
+        return False
+    status = pod.status.lower()
+    if "crash" in status or "error" in status:
+        return False
+    return status.startswith("running")
 
 
 def _user_question_text(query: str) -> str:

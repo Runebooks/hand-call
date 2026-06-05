@@ -114,6 +114,7 @@ Return a single JSON object:
 
 Rules:
 {extra}- 'what is the replica count' / 'how many replicas' → deployments (read-only, do NOT mutate)
+- 'how many pods in namespace X' / 'pods running in namespace' → list_pods, pod=null (namespace summary)
 - 'increase/set/scale replica count to N' → scale_deployment, scale_replicas=N
 - Pod test-agent-workload-5675697b79-2xh2z → deployment test-agent-workload (strip ReplicaSet suffix)
 - If user names deployment explicitly, set deployment field
@@ -237,6 +238,36 @@ def wants_deployment_name_query(text: str) -> bool:
     )
 
 
+def wants_namespace_pod_count(text: str) -> bool:
+    """Namespace-wide pod inventory (not a single alert pod)."""
+    if re.search(r"\bhow many\s+replicas?\b", text, re.I):
+        return False
+    if wants_deployment_pods(text):
+        return False
+    return bool(
+        re.search(
+            r"\b(how many|count|number of|total)\b.*\bpods?\b",
+            text,
+            re.I,
+        )
+        or re.search(
+            r"\bhow many\s+pods?\s+(are\s+)?(running|up|healthy|ready)\b",
+            text,
+            re.I,
+        )
+        or re.search(
+            r"\b(list|show|get|display)\b.*\b(all\s+)?pods?\b.*\b(in|for)\b",
+            text,
+            re.I,
+        )
+        or re.search(
+            r"\bpods?\b.*\b(in|for)\b.*\bnamespace\b",
+            text,
+            re.I,
+        )
+    )
+
+
 def wants_deployment_pods(text: str) -> bool:
     """List/describe all pods belonging to a deployment."""
     if _is_scale_mutation_phrasing(text):
@@ -319,6 +350,9 @@ def apply_intent_context(
             intent.in_scope = True
             if op == "scale_deployment" and intent.scale_replicas is None:
                 intent.scale_replicas = parse_scale_replicas(user)
+    elif wants_namespace_pod_count(user):
+        intent.action = "list_pods"
+        intent.pod = None
     elif wants_deployment_pods(user):
         intent.action = "list_pods"
         if not intent.deployment:

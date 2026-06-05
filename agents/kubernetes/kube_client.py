@@ -418,6 +418,142 @@ class KubeClient:
         events.sort(key=lambda e: e.get("count", 0), reverse=True)
         return events[:limit]
 
+    def list_nodes(self) -> list[dict]:
+        """List cluster nodes with readiness, roles, version and pressure conditions."""
+        node_list = self.core.list_node()
+        nodes: list[dict] = []
+        for node in node_list.items:
+            conditions = {c.type: c.status for c in (node.status.conditions or [])} if node.status else {}
+            ready = conditions.get("Ready") == "True"
+            pressures = [
+                cond
+                for cond in ("MemoryPressure", "DiskPressure", "PIDPressure")
+                if conditions.get(cond) == "True"
+            ]
+            labels = node.metadata.labels or {}
+            roles = sorted(
+                key.split("/", 1)[1] or "master"
+                for key in labels
+                if key.startswith("node-role.kubernetes.io/")
+            )
+            nodes.append(
+                {
+                    "name": node.metadata.name,
+                    "ready": ready,
+                    "status": "Ready" if ready else "NotReady",
+                    "roles": roles or ["worker"],
+                    "version": node.status.node_info.kubelet_version if node.status and node.status.node_info else "",
+                    "unschedulable": bool(node.spec.unschedulable) if node.spec else False,
+                    "pressures": pressures,
+                    "age": _format_age(node.metadata.creation_timestamp),
+                }
+            )
+        nodes.sort(key=lambda n: n["name"])
+        return nodes
+
+    def describe_pod(self, namespace: str, pod_name: str) -> dict:
+        """Detailed per-container spec + status (image, command, resources, exit codes).
+
+        High-signal for crash diagnosis: surfaces the entrypoint/args and the
+        last terminated state (exit code / reason) the LLM otherwise can't see.
+        """
+        pod = self.core.read_namespaced_pod(name=pod_name, namespace=namespace)
+        spec_by_name = {c.name: c for c in (pod.spec.containers or [])} if pod.spec else {}
+        status_by_name = (
+            {c.name: c for c in (pod.status.container_statuses or [])}
+            if pod.status
+            else {}
+        )
+
+        def _state(state) -> dict:
+            if not state:
+                return {}
+            if state.running:
+                return {"state": "running", "started_at": str(state.running.started_at or "")}
+            if state.waiting:
+                return {"state": "waiting", "reason": state.waiting.reason, "message": (state.waiting.message or "")[:200]}
+            if state.terminated:
+                t = state.terminated
+                return {
+                    "state": "terminated",
+                    "reason": t.reason,
+                    "exit_code": t.exit_code,
+                    "signal": t.signal,
+                    "message": (t.message or "")[:200],
+                    "finished_at": str(t.finished_at or ""),
+                }
+            return {}
+
+        containers = []
+        for name, cspec in spec_by_name.items():
+            cstatus = status_by_name.get(name)
+            resources = {}
+            if cspec.resources:
+                resources = {
+                    "requests": dict(cspec.resources.requests or {}),
+                    "limits": dict(cspec.resources.limits or {}),
+                }
+            containers.append(
+                {
+                    "name": name,
+                    "image": cspec.image,
+                    "command": list(cspec.command or []),
+                    "args": list(cspec.args or []),
+                    "env": sorted((e.name for e in (cspec.env or []))),
+                    "resources": resources,
+                    "ready": cstatus.ready if cstatus else None,
+                    "restart_count": cstatus.restart_count if cstatus else 0,
+                    "current_state": _state(cstatus.state) if cstatus else {},
+                    "last_state": _state(cstatus.last_state) if cstatus else {},
+                }
+            )
+
+        return {
+            "namespace": namespace,
+            "pod": pod_name,
+            "node": pod.spec.node_name if pod.spec else None,
+            "phase": pod.status.phase if pod.status else None,
+            "pod_ip": pod.status.pod_ip if pod.status else None,
+            "start_time": str(pod.status.start_time or "") if pod.status else "",
+            "restart_policy": pod.spec.restart_policy if pod.spec else None,
+            "containers": containers,
+        }
+
+    def list_services(
+        self,
+        namespace: Optional[str] = None,
+        name_contains: Optional[str] = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        """List services with type, cluster IP, ports and selector."""
+        if namespace:
+            svc_list = self.core.list_namespaced_service(namespace=namespace, limit=limit)
+        else:
+            svc_list = self.core.list_service_for_all_namespaces(limit=limit)
+
+        services = []
+        for svc in svc_list.items:
+            name = svc.metadata.name or ""
+            if name_contains and name_contains.lower() not in name.lower():
+                continue
+            ports = []
+            for p in (svc.spec.ports or []) if svc.spec else []:
+                proto = p.protocol or "TCP"
+                target = f"->{p.target_port}" if p.target_port is not None else ""
+                ports.append(f"{p.port}{target}/{proto}")
+            services.append(
+                {
+                    "namespace": svc.metadata.namespace,
+                    "name": name,
+                    "type": svc.spec.type if svc.spec else "",
+                    "cluster_ip": svc.spec.cluster_ip if svc.spec else "",
+                    "ports": ports,
+                    "selector": dict(svc.spec.selector or {}) if svc.spec else {},
+                }
+            )
+        services.sort(key=lambda s: (s["namespace"] or "", s["name"]))
+        return services[:limit]
+
 
 def _format_age(timestamp) -> str:
     if not timestamp:

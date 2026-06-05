@@ -1,0 +1,117 @@
+# Demo failure scenarios for exercising the kubernetes-agent.
+# Apply:  kubectl apply -f deploy/kubernetes/test-scenarios.yaml
+# Remove: kubectl delete -f deploy/kubernetes/test-scenarios.yaml
+#
+# Scenario 1 (checkout-api): CrashLoopBackOff with a realistic DB-connection
+#   error in the logs — great for "why is checkout-api crashing?" + log fetch.
+# Scenario 2 (inventory-sync): ImagePullBackOff from a non-existent image.
+# Scenario 3 (report-worker): OOMKilled — container exceeds its memory limit.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: checkout-api
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: checkout-api
+    app.kubernetes.io/part-of: demo-scenarios
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: checkout-api
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: checkout-api
+    spec:
+      containers:
+        - name: checkout-api
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[INFO]  checkout-api starting (build v1.4.2)"
+              echo "[INFO]  loading config from /etc/checkout/config.yaml"
+              echo "[INFO]  connecting to postgres at payments-db.a2a-ops.svc:5432"
+              sleep 3
+              echo "[ERROR] could not connect to database: dial tcp 10.43.0.12:5432: connect: connection refused"
+              echo "[ERROR] retry 1/3 failed: connection refused"
+              echo "[ERROR] retry 2/3 failed: connection refused"
+              echo "[ERROR] retry 3/3 failed: connection refused"
+              echo "[FATAL] startup aborted: payments database unavailable; exiting"
+              exit 1
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: inventory-sync
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: inventory-sync
+    app.kubernetes.io/part-of: demo-scenarios
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: inventory-sync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: inventory-sync
+    spec:
+      containers:
+        - name: inventory-sync
+          # Non-existent image/tag → ErrImagePull / ImagePullBackOff
+          image: registry.internal.example.com/inventory-sync:v9.9.9-missing
+          imagePullPolicy: Always
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: report-worker
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: report-worker
+    app.kubernetes.io/part-of: demo-scenarios
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: report-worker
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: report-worker
+    spec:
+      containers:
+        - name: report-worker
+          image: busybox:1.36
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              echo "[INFO]  report-worker started; building monthly report"
+              echo "[INFO]  allocating in-memory buffer for aggregation"
+              # Allocate more than the 32Mi limit to trigger OOMKilled.
+              tail /dev/zero
+          resources:
+            requests:
+              cpu: 10m
+              memory: 16Mi
+            limits:
+              cpu: 50m
+              memory: 32Mi

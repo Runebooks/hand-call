@@ -83,6 +83,7 @@ class PrometheusAgent(A2AServer):
 
     def _handle_query(self, query: str, meta: dict[str, Any]) -> str:
         user = _user_question(query)
+        meta = _apply_question_overrides(user, meta)
         rpm_block = _format_rpm_vs_threshold(meta, user)
         explicit = _extract_promql(user)
 
@@ -208,6 +209,62 @@ def _user_question(query: str) -> str:
     if marker in query:
         return query.split(marker, 1)[0].strip()
     return query.strip()
+
+
+# Pod named explicitly in the question (quoted, `pod <name>`, or replicaset-style).
+_QUOTED_NAME_RE = re.compile(r"""["'`]([A-Za-z0-9][A-Za-z0-9._-]{2,})["'`]""")
+_NAMED_OBJECT_RE = re.compile(
+    r"\b(?:pod|deployment|workload|container)\s+(?:named\s+|called\s+)?"
+    r"[\"'`]?([A-Za-z0-9][A-Za-z0-9._-]*-[A-Za-z0-9]{4,})[\"'`]?",
+    re.I,
+)
+_REPLICASET_POD_RE = re.compile(r"\b([a-z][a-z0-9-]+-[a-f0-9]{6,10}(?:-[a-z0-9]{5})?)\b")
+
+
+def _pod_in_question(text: str) -> Optional[str]:
+    """Extract a pod/workload name the user explicitly named in the question."""
+    if not text:
+        return None
+    m = _QUOTED_NAME_RE.search(text)
+    if m and "-" in m.group(1):
+        return m.group(1)
+    m = _NAMED_OBJECT_RE.search(text)
+    if m:
+        return m.group(1)
+    m = _REPLICASET_POD_RE.search(text)
+    if m:
+        return m.group(1)
+    return None
+
+
+def _apply_question_overrides(user: str, meta: dict[str, Any]) -> dict[str, Any]:
+    """Prioritize a pod named in the question over stale alert metadata.
+
+    When the user asks about a specific pod that differs from the alert's pod,
+    drop the alert's RPM/threshold/summary so we answer the actual question
+    instead of replaying the original alert.
+    """
+    named_pod = _pod_in_question(user)
+    if not named_pod:
+        return meta
+    meta_pod = (meta.get("pod") or meta.get("alert_sre_attributes") or "").strip()
+    if named_pod.lower() == meta_pod.lower():
+        return meta
+
+    new_meta = dict(meta)
+    new_meta["pod"] = named_pod
+    new_meta["alert_sre_attributes"] = named_pod
+    for key in ("current_value", "threshold", "summary", "alertname", "dashboard", "dashboard1", "hostname"):
+        new_meta.pop(key, None)
+    fields = dict(new_meta.get("fields") or {})
+    for key in ("current_value", "threshold", "summary", "hostname"):
+        fields.pop(key, None)
+    if fields:
+        new_meta["fields"] = fields
+    else:
+        new_meta.pop("fields", None)
+    logger.info("Question names pod %r; overriding alert pod %r", named_pod, meta_pod)
+    return new_meta
 
 
 def _parse_number(raw: Any) -> Optional[float]:

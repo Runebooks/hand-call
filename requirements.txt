@@ -8,6 +8,9 @@ httpx>=0.27.0
 # Kubernetes agent
 kubernetes>=31.0.0
 
+# MCP tool layer (kubernetes-agent brain/dispatcher)
+mcp>=1.2.0
+
 # Slack bot
 slack-bolt>=1.21.0
 slack-sdk>=3.33.0
