@@ -1,0 +1,98 @@
+---
+# 5-minute Freshstatus poller CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: freshstatus-poller
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: freshstatus-poller
+    app.kubernetes.io/part-of: freshservice-agent
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: poller
+              image: python:3.11-slim-bookworm
+              workingDir: /app
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  tar -xzf /src/agent-src.tar.gz -C /app
+                  pip install --no-cache-dir -q -r /app/requirements.txt
+                  exec python -m agents.freshservice.poller
+              envFrom:
+                - secretRef:
+                    name: freshservice-agent-config
+                    optional: true
+                - secretRef:
+                    name: kubernetes-agent-llm
+                    optional: true
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: LOG_LEVEL
+                  value: "INFO"
+                - name: POLLER_STATE_FILE
+                  value: "/tmp/freshstatus-poller-state.json"
+                # Set POLLER_ALERT_CHANNEL_ID or POLLER_SLACK_WEBHOOK_URL via secret
+              volumeMounts:
+                - name: source
+                  mountPath: /src
+          volumes:
+            - name: source
+              configMap:
+                name: a2a-agents-source
+---
+# Hourly analytics export sync CronJob
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: freshservice-analytics-sync
+  namespace: a2a-ops
+  labels:
+    app.kubernetes.io/name: freshservice-analytics-sync
+    app.kubernetes.io/part-of: freshservice-agent
+spec:
+  schedule: "0 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: analytics-sync
+              image: python:3.11-slim-bookworm
+              workingDir: /app
+              command: ["/bin/bash", "-ec"]
+              args:
+                - |
+                  tar -xzf /src/agent-src.tar.gz -C /app
+                  pip install --no-cache-dir -q -r /app/requirements.txt
+                  exec python -m agents.freshservice.analytics_sync
+              envFrom:
+                - secretRef:
+                    name: freshservice-agent-config
+                    optional: true
+              env:
+                - name: PYTHONUNBUFFERED
+                  value: "1"
+                - name: LOG_LEVEL
+                  value: "INFO"
+              volumeMounts:
+                - name: source
+                  mountPath: /src
+          volumes:
+            - name: source
+              configMap:
+                name: a2a-agents-source

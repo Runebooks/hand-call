@@ -28,6 +28,7 @@ echo "==> Prometheus + RDS + Freshservice agents"
 kubectl apply -f "${ROOT}/deploy/kubernetes/deployment-prometheus.yaml"
 kubectl apply -f "${ROOT}/deploy/kubernetes/deployment-rds.yaml"
 kubectl apply -f "${ROOT}/deploy/kubernetes/deployment-freshservice.yaml"
+kubectl apply -f "${ROOT}/deploy/kubernetes/cronjobs-freshservice.yaml"
 kubectl rollout status deployment/prometheus-agent -n "${NAMESPACE}" --timeout=180s
 kubectl rollout status deployment/rds-agent -n "${NAMESPACE}" --timeout=180s
 kubectl rollout status deployment/freshservice-agent -n "${NAMESPACE}" --timeout=180s
