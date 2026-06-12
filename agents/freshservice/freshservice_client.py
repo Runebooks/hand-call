@@ -92,7 +92,8 @@ class FreshserviceClient:
           - ticket.activities     (PIR status audit: Draft → Published)
           - ticket fields         (subject, description, status, priority, assignee)
 
-        Returns a structured dict containing all these sections ready for LLM reasoning.
+        Returns a structured dict with parsed timeline_events, personnel list,
+        and raw_bridge_notes for full LLM reasoning.
         """
         import re as _re
 
@@ -105,41 +106,81 @@ class FreshserviceClient:
 
         cf = ticket.get("custom_fields") or {}
 
-        # Extract timeline from conversations (strip HTML)
-        timeline_entries: list[dict] = []
-        for conv in conversations:
+        # Bridge notes use format: "DD/MM/YYYY HH:MM AM/PM <action>"
+        _TS_RE = _re.compile(r"\d{1,2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}\s*[AP]M")
+        # Non-name words to skip when extracting personnel
+        _SKIP_NAMES = {
+            "The", "This", "Incident", "Status", "Slack", "Zoom", "NOC",
+            "Haystack", "Freshdesk", "Freshservice", "Freshworks", "Freshchat",
+            "India", "Rollback", "Start", "End", "Time", "UTC", "IST",
+        }
+
+        timeline_events: list[dict] = []
+        all_names: set[str] = set()
+        raw_bridge_notes: list[str] = []
+
+        for conv in sorted(conversations, key=lambda c: c.get("created_at") or ""):
             body_html = conv.get("body") or ""
             body_text = _re.sub(r"<[^>]+>", " ", body_html)
+            body_text = _re.sub(r"&nbsp;", " ", body_text)
             body_text = _re.sub(r"\s{2,}", " ", body_text).strip()
-            if body_text:
-                timeline_entries.append({
-                    "id": conv.get("id"),
-                    "created_at": conv.get("created_at"),
-                    "private": conv.get("private"),
-                    "text": body_text[:4000],
+            if not body_text:
+                continue
+
+            raw_bridge_notes.append(body_text[:8000])
+
+            stamps = _TS_RE.findall(body_text)
+            parts = _TS_RE.split(body_text)
+
+            if stamps:
+                for i, stamp in enumerate(stamps):
+                    raw_event = parts[i + 1].strip() if (i + 1) < len(parts) else ""
+                    if not raw_event:
+                        continue
+                    # Trim at the next timestamp (already split) — keep meaningful sentence
+                    event_text = raw_event.split("\n")[0].strip()
+                    if event_text:
+                        timeline_events.append({"time": stamp, "event": event_text[:400]})
+                    # Extract "First Last" name patterns from the event text
+                    for m in _re.finditer(r"\b([A-Z][a-z]{1,15}(?:\s[A-Z][a-z]{1,20}){1,2})\b", raw_event[:400]):
+                        name = m.group(1).strip()
+                        first = name.split()[0]
+                        if first not in _SKIP_NAMES and len(name) > 4:
+                            all_names.add(name)
+            else:
+                # No timestamps — keep as-is (Slack thread link, ref notes, etc.)
+                timeline_events.append({
+                    "time": conv.get("created_at", ""),
+                    "event": body_text[:600],
                 })
 
-        # PIR status from activities
+        # PIR status and number from activities
         pir_status = None
         pir_number = None
         for act in activities:
             content = act.get("content") or ""
             if "PIR" in content:
-                m = _re.search(r"#(PIR-\d+)", content)
+                m = _re.search(r"#?(PIR-\d+)", content)
                 if m:
                     pir_number = m.group(1)
                 for sub in act.get("sub_contents") or []:
-                    if "Published" in str(sub):
+                    s = str(sub)
+                    if "Published" in s:
                         pir_status = "Published"
-                    elif "Draft" in str(sub) and pir_status != "Published":
+                    elif "Draft" in s and pir_status != "Published":
                         pir_status = "Draft"
+
+        if not pir_status and cf.get("pir_generated"):
+            pir_status = "Published"
+        if not pir_number and cf.get("pir_number"):
+            pir_number = str(cf["pir_number"])
 
         return {
             "ticket_id": ticket.get("id"),
             "pir_number": pir_number,
             "pir_status": pir_status or ("generated" if cf.get("pir_generated") else "not_generated"),
             "subject": ticket.get("subject"),
-            "description": _re.sub(r"<[^>]+>", " ", ticket.get("description") or "").strip()[:500],
+            "description": _re.sub(r"<[^>]+>", " ", ticket.get("description") or "").strip()[:800],
             "status": ticket.get("status"),
             "priority": ticket.get("priority"),
             "created_at": ticket.get("created_at"),
@@ -165,8 +206,12 @@ class FreshserviceClient:
             "status_page_updated": cf.get("status_page_updated"),
             "rca_presented_in_mom": cf.get("rca_presented_in_mom"),
             "assignee_manager": cf.get("assignee_manager"),
-            # Full incident timeline (from conversations)
-            "timeline": timeline_entries,
+            # Parsed individual timeline events from bridge notes (chronological)
+            "timeline_events": timeline_events,
+            # All people mentioned by name in the incident bridge — who was involved
+            "personnel": sorted(all_names),
+            # Raw bridge note texts — LLM can reason over full narrative
+            "raw_bridge_notes": raw_bridge_notes,
             "pir_url": f"https://{self.domain}/a/tickets/{ticket_id}/post-incident-report",
         }
 
@@ -174,15 +219,41 @@ class FreshserviceClient:
         self,
         product_filter: str = "",
         limit: int = 20,
+        date_filter: str = "",
     ) -> list[dict]:
         """
         List recent Major Incident (MIM) tickets, newest first.
         Uses workspace_id=24 + type=Major Incident for server-side filtering.
         Optionally filters by product name (case-insensitive substring match).
+        Optionally filters by date (matches against incident_start_time, created_at).
         """
+        import re as _dre
         collected: list[dict] = []
         page = 1
         per_page = 30
+        # Parse date_filter: accept "May 14", "2026-05-14", "14 May", etc.
+        date_lower = date_filter.lower().strip() if date_filter else ""
+        _MONTH_MAP = {
+            "jan": "01", "feb": "02", "mar": "03", "apr": "04",
+            "may": "05", "jun": "06", "jul": "07", "aug": "08",
+            "sep": "09", "oct": "10", "nov": "11", "dec": "12",
+        }
+        date_prefix = ""
+        if date_lower:
+            # Try to extract YYYY-MM-DD or MM-DD prefix for string matching
+            m = _dre.search(r"(\d{4})-(\d{2})-(\d{2})", date_filter)
+            if m:
+                date_prefix = m.group(0)  # e.g. "2026-05-14"
+            else:
+                m2 = _dre.search(r"(\w{3,9})\s+(\d{1,2}),?\s*(\d{4})?", date_lower)
+                if m2:
+                    mon_word = m2.group(1)[:3]
+                    day = m2.group(2).zfill(2)
+                    yr = m2.group(3) or "2026"
+                    mon_num = _MONTH_MAP.get(mon_word, "")
+                    if mon_num:
+                        date_prefix = f"{yr}-{mon_num}-{day}"
+
         while len(collected) < limit:
             url = f"{self._base()}/tickets"
             params: dict[str, Any] = {
@@ -216,6 +287,11 @@ class FreshserviceClient:
                     ]).lower()
                     if prod_lower not in prod_blob:
                         continue
+                if date_prefix:
+                    # Match against incident_start_time or created_at
+                    start = str(cf.get("incident_start_time") or t.get("created_at") or "")
+                    if date_prefix not in start:
+                        continue
                 collected.append({
                     "id": t.get("id"),
                     "subject": t.get("subject"),
@@ -240,7 +316,6 @@ class FreshserviceClient:
                 if len(collected) >= limit:
                     break
 
-            # Stop paginating if fewer results than requested (last page)
             if len(tickets) < per_page:
                 break
             page += 1
@@ -253,15 +328,18 @@ class FreshserviceClient:
         ticket_type: str = "Incident",
         page: int = 1,
         per_page: int = 15,
+        date_filter: str = "",
     ) -> list[dict]:
         """
         Search / list MIM tickets. When query is a product name (e.g. 'Freshdesk'),
         delegates to list_major_incidents for accurate results since the filter API
         does not support type= filtering.
         """
-        if query:
-            return self.list_major_incidents(product_filter=query, limit=min(per_page, 30))
-        return self.list_major_incidents(limit=min(per_page, 30))
+        return self.list_major_incidents(
+            product_filter=query,
+            limit=min(per_page, 30),
+            date_filter=date_filter,
+        )
 
     def get_analytics_export_csv(self, export_id: str) -> str:
         """Fetch a Freshservice Analytics scheduled-export CSV as raw text."""

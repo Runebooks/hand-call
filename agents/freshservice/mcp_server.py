@@ -89,16 +89,18 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "function": {
             "name": "search_tickets",
             "description": (
-                "Search Freshservice MIM/Major Incident tickets by product, keyword or free text. "
+                "Search Freshservice MIM/Major Incident tickets by product, date, keyword or free text. "
                 "Use this for 'recent Freshdesk outages', 'latest incidents for Freshchat', "
-                "'show me recent MIM tickets', or any question about multiple incidents when "
-                "MySQL is not available. Returns list of tickets with subject, status, priority, "
-                "custom_fields (MTTR, issue_category, products_affected, etc.)."
+                "'show me recent MIM tickets', 'outage on May 14', 'incident last week', "
+                "or any question about multiple incidents when MySQL is not available. "
+                "Returns list of tickets with subject, status, priority, incident_start_time, "
+                "MTTR, products_affected, pir_url etc."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Product or keyword filter (e.g. 'Freshdesk', 'performance'). Leave empty for all recent MIM tickets."},
+                    "date_filter": {"type": "string", "description": "Filter by incident date, e.g. 'May 14', '2026-05-14', 'June 4'. Matches against incident_start_time."},
                     "per_page": {"type": "integer", "description": "Max results (default 15, max 30)."},
                 },
             },
@@ -253,6 +255,7 @@ class FreshserviceToolDispatcher:
         tickets = self.fs.search_tickets(
             query=args.get("query") or "",
             per_page=int(args.get("per_page") or 15),
+            date_filter=args.get("date_filter") or "",
         )
         return {"count": len(tickets), "tickets": tickets}
 
@@ -262,6 +265,7 @@ class FreshserviceToolDispatcher:
         tickets = self.fs.list_major_incidents(
             product_filter=args.get("product") or "",
             limit=int(args.get("limit") or 20),
+            date_filter=args.get("date_filter") or "",
         )
         return {"count": len(tickets), "tickets": tickets}
 

@@ -80,9 +80,25 @@ Post Incident Report (PIR): Every MIM/Major Incident ticket has a PIR document. 
 When the user asks about incident details, timeline, root cause, MTTA/MTTD/MTTR, \
 what happened, who was involved, impact, resolution, or any specific MIM/ticket — \
 ALWAYS call the get_pir tool first (not just get_ticket). \
-get_pir returns the complete incident document: operational metrics, full timeline, \
-products/regions affected, issue category, and PIR status (Draft/Published). \
+\
+get_pir returns these key fields — USE THEM directly in your answer: \
+  - timeline_events: list of {time, event} dicts — the ACTUAL incident timeline parsed \
+    from bridge notes. Present these chronologically with timestamps when asked for the \
+    timeline. Do NOT summarise or invent timeline entries — present exactly what is in \
+    timeline_events, one bullet per event. \
+  - personnel: list of names of everyone mentioned in the bridge notes — who was \
+    involved, who responded, who joined the call. Use this for "who was involved" questions. \
+  - raw_bridge_notes: full text of bridge conversations — use for any detail not \
+    captured in timeline_events (e.g. exact quotes, Slack links, RCA details). \
+  - products_affected, regions_affected, issue_category, impact_to_customer — use \
+    these for product/region/root cause questions. \
 For follow-up detail, also call get_ticket_conversations to get the full bridge notes.
+
+Date-based incident queries ("outage on May 14", "incident last week", etc.): \
+ALWAYS use search_tickets first to get recent MIM tickets, then check their \
+incident_start_time to find the one matching the user's date. Once found, call \
+get_pir on that ticket for full details. Do NOT say "ticket not found" without first \
+calling search_tickets and checking results by date.
 
 When MySQL tools return "MySQL not configured" (MYSQL_HOST unset), fall back to \
 Freshservice API directly: use search_tickets to find recent MIM tickets by product \
