@@ -83,6 +83,12 @@ ALWAYS call the get_pir tool first (not just get_ticket). \
 get_pir returns the complete incident document: operational metrics, full timeline, \
 products/regions affected, issue category, and PIR status (Draft/Published). \
 For follow-up detail, also call get_ticket_conversations to get the full bridge notes.
+
+When MySQL tools return "MySQL not configured" (MYSQL_HOST unset), fall back to \
+Freshservice API directly: use search_tickets to find recent MIM tickets by product \
+(e.g. query='Freshdesk' or query='Freshchat'), then call get_pir for each relevant \
+ticket to build a complete briefing. Do NOT say "data not available" when \
+Freshservice API can answer the question — always try search_tickets + get_pir first.
 """
 
 

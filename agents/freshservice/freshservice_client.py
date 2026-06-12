@@ -175,13 +175,13 @@ class FreshserviceClient:
         query: str = "",
         ticket_type: str = "Incident",
         page: int = 1,
-        per_page: int = 10,
+        per_page: int = 15,
     ) -> list[dict]:
-        """Search tickets via Freshservice filter API."""
+        """Search MIM/Major Incident tickets. Returns slim ticket list with key custom_fields."""
         params: dict[str, Any] = {
             "type": ticket_type,
             "page": page,
-            "per_page": per_page,
+            "per_page": min(per_page, 30),
         }
         if query:
             params["query"] = f'"{query}"'
@@ -189,7 +189,33 @@ class FreshserviceClient:
         try:
             resp = httpx.get(url, headers=self._headers(), params=params, timeout=_TIMEOUT, follow_redirects=True)
             resp.raise_for_status()
-            return resp.json().get("tickets") or []
+            tickets = resp.json().get("tickets") or []
+            # Slim down: keep key fields + most useful custom_fields to avoid token bloat
+            slim = []
+            for t in tickets:
+                cf = t.get("custom_fields") or {}
+                slim.append({
+                    "id": t.get("id"),
+                    "subject": t.get("subject"),
+                    "status": t.get("status"),
+                    "priority": t.get("priority"),
+                    "created_at": t.get("created_at"),
+                    "updated_at": t.get("updated_at"),
+                    "type": t.get("type"),
+                    "product": cf.get("myproduct") or cf.get("product"),
+                    "module": cf.get("module"),
+                    "products_affected": cf.get("msf_products_affected") or [],
+                    "regions_affected": cf.get("msf_affected_regions") or [],
+                    "issue_category": cf.get("issue_category"),
+                    "major_incident_type": cf.get("major_incident_type"),
+                    "mttr_minutes": cf.get("time_to_recover_in_minutes_time_passed_between_the_onset_of_the_incident_and_its_recovery_this_should_be_ideally_greater_than_the_time_to_detect"),
+                    "incident_start_time": cf.get("incident_start_time"),
+                    "incident_end_time": cf.get("incident_end_time"),
+                    "impact_to_customer": (cf.get("impact_to_customer") or "")[:200],
+                    "statuspage_url": cf.get("statuspage_url"),
+                    "pir_url": f"https://{self.domain}/a/tickets/{t.get('id')}/post-incident-report",
+                })
+            return slim
         except Exception as exc:
             logger.warning("Freshservice search_tickets: %s", exc)
             return []

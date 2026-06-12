@@ -88,12 +88,18 @@ TOOL_SPECS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "search_tickets",
-            "description": "Search Freshservice tickets by keyword query.",
+            "description": (
+                "Search Freshservice MIM/Major Incident tickets by product, keyword or free text. "
+                "Use this for 'recent Freshdesk outages', 'latest incidents for Freshchat', "
+                "'show me recent MIM tickets', or any question about multiple incidents when "
+                "MySQL is not available. Returns list of tickets with subject, status, priority, "
+                "custom_fields (MTTR, issue_category, products_affected, etc.)."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query string."},
-                    "per_page": {"type": "integer", "description": "Results per page (default 10)."},
+                    "query": {"type": "string", "description": "Search query string (e.g. 'Freshdesk' or 'performance degradation')."},
+                    "per_page": {"type": "integer", "description": "Results per page (default 15, max 30)."},
                 },
             },
         },
