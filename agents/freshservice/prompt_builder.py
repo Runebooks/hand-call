@@ -75,6 +75,14 @@ workflow footer.
 TOOLS: You have access to tools to fetch data. Always call the relevant tools before answering. \
 After gathering data, call submit_report exactly once to deliver your final structured answer. \
 Do not answer from training knowledge alone — pull live data first.
+
+Post Incident Report (PIR): Every MIM/Major Incident ticket has a PIR document. \
+When the user asks about incident details, timeline, root cause, MTTA/MTTD/MTTR, \
+what happened, who was involved, impact, resolution, or any specific MIM/ticket — \
+ALWAYS call the get_pir tool first (not just get_ticket). \
+get_pir returns the complete incident document: operational metrics, full timeline, \
+products/regions affected, issue category, and PIR status (Draft/Published). \
+For follow-up detail, also call get_ticket_conversations to get the full bridge notes.
 """
 
 

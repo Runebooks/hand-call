@@ -43,7 +43,7 @@ SUBMIT_REPORT_TOOL: dict[str, Any] = {
                 "key_facts": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "3–7 bullet points: ticket id, product, region, priority, MTTR, assignee, key links. No invented values.",
+                    "description": "3–7 bullet points: ticket id, PIR number, product, region, priority, MTTA/MTTD/MTTR, assignee, start/end time. No invented values.",
                 },
                 "root_cause": {
                     "type": "string",

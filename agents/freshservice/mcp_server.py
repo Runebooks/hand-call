@@ -54,7 +54,31 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "ticket_id": {"type": "string"},
-                    "limit": {"type": "integer", "description": "Max conversations (default 5)."},
+                    "limit": {"type": "integer", "description": "Max conversations (default 50)."},
+                },
+                "required": ["ticket_id"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_pir",
+            "description": (
+                "Fetch the full Post Incident Report (PIR) for a MIM ticket. "
+                "Returns the complete incident document: MTTA, MTTD, MTTR, start/end times, "
+                "impact, products/regions affected, root cause category, incident timeline "
+                "(from Slack bridge notes), PIR status (Draft/Published), and the PIR URL. "
+                "Use this whenever the user asks about the PIR, incident details, timeline, "
+                "root cause, MTTR/MTTD, impact, or 'what happened' for a specific ticket."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "ticket_id": {
+                        "type": "string",
+                        "description": "Freshservice ticket id or MI-reference (e.g. MI-4381855 or 4381855).",
+                    }
                 },
                 "required": ["ticket_id"],
             },
@@ -206,9 +230,16 @@ class FreshserviceToolDispatcher:
             return {"error": "Freshservice API key not configured."}
         raw_id = str(args.get("ticket_id") or "")
         tid = mi_ref_to_id(raw_id) or raw_id
-        limit = int(args.get("limit") or 5)
+        limit = int(args.get("limit") or 50)
         convs = self.fs.get_ticket_conversations(tid, limit=limit)
         return {"ticket_id": tid, "conversations": convs}
+
+    def _tool_get_pir(self, args: dict) -> Any:
+        if not self.fs.enabled:
+            return {"error": "Freshservice API key not configured (FRESHSERVICE_API_KEY unset)."}
+        raw_id = str(args.get("ticket_id") or "")
+        tid = mi_ref_to_id(raw_id) or raw_id
+        return self.fs.get_pir(tid)
 
     def _tool_search_tickets(self, args: dict) -> Any:
         if not self.fs.enabled:

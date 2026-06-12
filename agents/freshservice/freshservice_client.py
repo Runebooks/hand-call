@@ -58,8 +58,8 @@ class FreshserviceClient:
             logger.warning("Freshservice get_ticket %s: %s", ticket_id, exc)
             return {"error": str(exc), "ticket_id": ticket_id}
 
-    def get_ticket_conversations(self, ticket_id: int | str, limit: int = 5) -> list[dict]:
-        """Fetch recent conversations/notes for a ticket."""
+    def get_ticket_conversations(self, ticket_id: int | str, limit: int = 50) -> list[dict]:
+        """Fetch all conversations/notes for a ticket (up to limit)."""
         url = f"{self._base()}/tickets/{ticket_id}/conversations"
         try:
             resp = httpx.get(url, headers=self._headers(), timeout=_TIMEOUT, follow_redirects=True)
@@ -69,6 +69,106 @@ class FreshserviceClient:
         except Exception as exc:
             logger.warning("Freshservice conversations %s: %s", ticket_id, exc)
             return []
+
+    def get_ticket_activities(self, ticket_id: int | str) -> list[dict]:
+        """Fetch activity log for a ticket (who changed what, PIR status updates)."""
+        url = f"{self._base()}/tickets/{ticket_id}/activities"
+        try:
+            resp = httpx.get(url, headers=self._headers(), timeout=_TIMEOUT, follow_redirects=True)
+            resp.raise_for_status()
+            return resp.json().get("activities") or []
+        except Exception as exc:
+            logger.warning("Freshservice activities %s: %s", ticket_id, exc)
+            return []
+
+    def get_pir(self, ticket_id: int | str) -> dict[str, Any]:
+        """
+        Assemble the Post Incident Report (PIR) for a MIM ticket.
+
+        Freshservice does not expose a single /post_incident_report REST endpoint.
+        The PIR data is distributed across:
+          - ticket.custom_fields  (MTTA, MTTD, MTTR, timestamps, impact, product)
+          - ticket.conversations  (incident timeline, bridge updates, Slack thread)
+          - ticket.activities     (PIR status audit: Draft → Published)
+          - ticket fields         (subject, description, status, priority, assignee)
+
+        Returns a structured dict containing all these sections ready for LLM reasoning.
+        """
+        import re as _re
+
+        ticket = self.get_ticket(ticket_id)
+        if "error" in ticket:
+            return ticket
+
+        conversations = self.get_ticket_conversations(ticket_id, limit=50)
+        activities = self.get_ticket_activities(ticket_id)
+
+        cf = ticket.get("custom_fields") or {}
+
+        # Extract timeline from conversations (strip HTML)
+        timeline_entries: list[dict] = []
+        for conv in conversations:
+            body_html = conv.get("body") or ""
+            body_text = _re.sub(r"<[^>]+>", " ", body_html)
+            body_text = _re.sub(r"\s{2,}", " ", body_text).strip()
+            if body_text:
+                timeline_entries.append({
+                    "id": conv.get("id"),
+                    "created_at": conv.get("created_at"),
+                    "private": conv.get("private"),
+                    "text": body_text[:4000],
+                })
+
+        # PIR status from activities
+        pir_status = None
+        pir_number = None
+        for act in activities:
+            content = act.get("content") or ""
+            if "PIR" in content:
+                m = _re.search(r"#(PIR-\d+)", content)
+                if m:
+                    pir_number = m.group(1)
+                for sub in act.get("sub_contents") or []:
+                    if "Published" in str(sub):
+                        pir_status = "Published"
+                    elif "Draft" in str(sub) and pir_status != "Published":
+                        pir_status = "Draft"
+
+        return {
+            "ticket_id": ticket.get("id"),
+            "pir_number": pir_number,
+            "pir_status": pir_status or ("generated" if cf.get("pir_generated") else "not_generated"),
+            "subject": ticket.get("subject"),
+            "description": _re.sub(r"<[^>]+>", " ", ticket.get("description") or "").strip()[:500],
+            "status": ticket.get("status"),
+            "priority": ticket.get("priority"),
+            "created_at": ticket.get("created_at"),
+            "updated_at": ticket.get("updated_at"),
+            # Operational metrics from custom fields
+            "incident_start_time": cf.get("incident_start_time"),
+            "incident_end_time": cf.get("incident_end_time"),
+            "incident_detected_time": cf.get("incident_detected_time"),
+            "incident_acknowledged_time": cf.get("incident_acknowledged_time"),
+            "mtta_minutes": cf.get("time_to_ack_in_minutes_time_between_incident_occurrence_and_on_call_involvement"),
+            "mttd_minutes": cf.get("time_to_detect_in_minutes_time_passed_between_the_onset_of_an_incident_and_its_discovery"),
+            "mttr_minutes": cf.get("time_to_recover_in_minutes_time_passed_between_the_onset_of_the_incident_and_its_recovery_this_should_be_ideally_greater_than_the_time_to_detect"),
+            # Impact / classification
+            "product": cf.get("myproduct") or cf.get("product"),
+            "module": cf.get("module"),
+            "products_affected": cf.get("msf_products_affected") or [],
+            "regions_affected": cf.get("msf_affected_regions") or [],
+            "issue_category": cf.get("issue_category"),
+            "major_incident_type": cf.get("major_incident_type"),
+            "type_of_incident": cf.get("type_of_incident"),
+            "impact_to_customer": cf.get("impact_to_customer"),
+            "statuspage_url": cf.get("statuspage_url"),
+            "status_page_updated": cf.get("status_page_updated"),
+            "rca_presented_in_mom": cf.get("rca_presented_in_mom"),
+            "assignee_manager": cf.get("assignee_manager"),
+            # Full incident timeline (from conversations)
+            "timeline": timeline_entries,
+            "pir_url": f"https://{self.domain}/a/tickets/{ticket_id}/post-incident-report",
+        }
 
     def search_tickets(
         self,
