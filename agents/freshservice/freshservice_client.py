@@ -170,37 +170,58 @@ class FreshserviceClient:
             "pir_url": f"https://{self.domain}/a/tickets/{ticket_id}/post-incident-report",
         }
 
-    def search_tickets(
+    def list_major_incidents(
         self,
-        query: str = "",
-        ticket_type: str = "Incident",
-        page: int = 1,
-        per_page: int = 15,
+        product_filter: str = "",
+        limit: int = 20,
     ) -> list[dict]:
-        """Search MIM/Major Incident tickets. Returns slim ticket list with key custom_fields."""
-        params: dict[str, Any] = {
-            "type": ticket_type,
-            "page": page,
-            "per_page": min(per_page, 30),
-        }
-        if query:
-            params["query"] = f'"{query}"'
-        url = f"{self._base()}/tickets/filter"
-        try:
-            resp = httpx.get(url, headers=self._headers(), params=params, timeout=_TIMEOUT, follow_redirects=True)
-            resp.raise_for_status()
-            tickets = resp.json().get("tickets") or []
-            # Slim down: keep key fields + most useful custom_fields to avoid token bloat
-            slim = []
+        """
+        List recent Major Incident (MIM) tickets, newest first.
+        Uses workspace_id=24 + type=Major Incident for server-side filtering.
+        Optionally filters by product name (case-insensitive substring match).
+        """
+        collected: list[dict] = []
+        page = 1
+        per_page = 30
+        while len(collected) < limit:
+            url = f"{self._base()}/tickets"
+            params: dict[str, Any] = {
+                "workspace_id": "24",
+                "type": "Major Incident",
+                "per_page": per_page,
+                "page": page,
+                "order_by": "created_at",
+                "order_type": "desc",
+            }
+            try:
+                resp = httpx.get(url, headers=self._headers(), params=params, timeout=_TIMEOUT, follow_redirects=True)
+                resp.raise_for_status()
+                tickets = resp.json().get("tickets") or []
+            except Exception as exc:
+                logger.warning("Freshservice list_major_incidents page=%d: %s", page, exc)
+                break
+
+            if not tickets:
+                break
+
+            prod_lower = product_filter.lower().strip()
             for t in tickets:
                 cf = t.get("custom_fields") or {}
-                slim.append({
+                if prod_lower:
+                    prod_blob = " ".join([
+                        str(cf.get("myproduct") or ""),
+                        str(cf.get("module") or ""),
+                        " ".join(cf.get("msf_products_affected") or []),
+                        str(t.get("subject") or ""),
+                    ]).lower()
+                    if prod_lower not in prod_blob:
+                        continue
+                collected.append({
                     "id": t.get("id"),
                     "subject": t.get("subject"),
                     "status": t.get("status"),
                     "priority": t.get("priority"),
                     "created_at": t.get("created_at"),
-                    "updated_at": t.get("updated_at"),
                     "type": t.get("type"),
                     "product": cf.get("myproduct") or cf.get("product"),
                     "module": cf.get("module"),
@@ -213,12 +234,34 @@ class FreshserviceClient:
                     "incident_end_time": cf.get("incident_end_time"),
                     "impact_to_customer": (cf.get("impact_to_customer") or "")[:200],
                     "statuspage_url": cf.get("statuspage_url"),
+                    "pir_generated": cf.get("pir_generated"),
                     "pir_url": f"https://{self.domain}/a/tickets/{t.get('id')}/post-incident-report",
                 })
-            return slim
-        except Exception as exc:
-            logger.warning("Freshservice search_tickets: %s", exc)
-            return []
+                if len(collected) >= limit:
+                    break
+
+            # Stop paginating if fewer results than requested (last page)
+            if len(tickets) < per_page:
+                break
+            page += 1
+
+        return collected
+
+    def search_tickets(
+        self,
+        query: str = "",
+        ticket_type: str = "Incident",
+        page: int = 1,
+        per_page: int = 15,
+    ) -> list[dict]:
+        """
+        Search / list MIM tickets. When query is a product name (e.g. 'Freshdesk'),
+        delegates to list_major_incidents for accurate results since the filter API
+        does not support type= filtering.
+        """
+        if query:
+            return self.list_major_incidents(product_filter=query, limit=min(per_page, 30))
+        return self.list_major_incidents(limit=min(per_page, 30))
 
     def get_analytics_export_csv(self, export_id: str) -> str:
         """Fetch a Freshservice Analytics scheduled-export CSV as raw text."""

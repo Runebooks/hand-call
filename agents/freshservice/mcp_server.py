@@ -98,8 +98,8 @@ TOOL_SPECS: list[dict[str, Any]] = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "query": {"type": "string", "description": "Search query string (e.g. 'Freshdesk' or 'performance degradation')."},
-                    "per_page": {"type": "integer", "description": "Results per page (default 15, max 30)."},
+                    "query": {"type": "string", "description": "Product or keyword filter (e.g. 'Freshdesk', 'performance'). Leave empty for all recent MIM tickets."},
+                    "per_page": {"type": "integer", "description": "Max results (default 15, max 30)."},
                 },
             },
         },
@@ -252,7 +252,16 @@ class FreshserviceToolDispatcher:
             return {"error": "Freshservice API key not configured."}
         tickets = self.fs.search_tickets(
             query=args.get("query") or "",
-            per_page=int(args.get("per_page") or 10),
+            per_page=int(args.get("per_page") or 15),
+        )
+        return {"count": len(tickets), "tickets": tickets}
+
+    def _tool_list_major_incidents(self, args: dict) -> Any:
+        if not self.fs.enabled:
+            return {"error": "Freshservice API key not configured."}
+        tickets = self.fs.list_major_incidents(
+            product_filter=args.get("product") or "",
+            limit=int(args.get("limit") or 20),
         )
         return {"count": len(tickets), "tickets": tickets}
 
