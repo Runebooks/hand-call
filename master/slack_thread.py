@@ -348,7 +348,11 @@ def run_investigation(
             query,
             alert=alert,
             session_id=f"slack-{channel}-{thread_ts}",
-            extra_metadata={"source": "slack"},
+            extra_metadata={
+                "source": "slack",
+                "slack_channel": channel,
+                "slack_thread_ts": thread_ts,
+            },
         )
         reply = master.format_reply(alert, result, user_prompt=user_prompt)
         reply, confirm = _split_confirm(reply)

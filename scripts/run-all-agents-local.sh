@@ -44,8 +44,9 @@ fi
 start_agent agents.prometheus.server 8080
 start_agent agents.rds.server 8081
 start_agent agents.kubernetes.server 8082
+start_agent agents.freshservice.server 8083
 
-export AGENT_URLS="http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082"
+export AGENT_URLS="http://127.0.0.1:8080,http://127.0.0.1:8081,http://127.0.0.1:8082,http://127.0.0.1:8083"
 echo ""
 echo "AGENT_URLS=${AGENT_URLS}"
 echo "Run Slack bot: ./scripts/run-slack-bot-local.sh"

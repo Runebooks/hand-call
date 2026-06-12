@@ -1,6 +1,6 @@
 {
   "name": "master-agent",
-  "description": "NOC investigation router — discovers specialist Agent Cards, routes by alertname/keywords/LLM, and orchestrates A2A tasks to prometheus, rds, and kubernetes agents.",
+  "description": "NOC investigation router — discovers specialist Agent Cards, routes by alertname/keywords/LLM, and orchestrates A2A tasks to prometheus, rds, kubernetes, and freshservice agents.",
   "url": "http://master-agent.a2a-ops.svc.cluster.local:8095",
   "version": "1.0.0",
   "capabilities": {
@@ -47,6 +47,18 @@
       "examples": [
         "RDS connection count high",
         "Database replica lag on orders-db"
+      ]
+    },
+    {
+      "id": "route_freshservice",
+      "name": "Freshservice / Incident Routing",
+      "description": "Route MIM, incident, ticket, and Freshstatus questions to freshservice-agent",
+      "tags": ["incident", "incidents", "mim", "ticket", "tickets", "outage", "freshservice", "freshstatus", "mttr", "mttd", "briefing", "escalation"],
+      "examples": [
+        "What is the status of MI-4301250?",
+        "Any active Freshstatus incidents?",
+        "Give me a briefing on recent Freshdesk outages",
+        "How many MIM incidents in April?"
       ]
     }
   ],

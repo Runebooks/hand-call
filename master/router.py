@@ -28,6 +28,16 @@ _USER_PROM = re.compile(
 )
 _EXPLICIT_PROMQL = re.compile(r"(?:promql|query)\s*[:=]", re.I)
 
+# Layer 0 — Freshservice / incident intent (highest priority, beats K8s/Prometheus)
+# Matches explicit MIM ticket references and strong NOC incident signals.
+_USER_FS = re.compile(
+    r"\bMI-\d+\b"
+    r"|\b(incident|incidents|mim|outage|outages|freshservice|freshstatus|"
+    r"handover|status\s*page|zoom\s*link|mttr|mttd|briefing|escalat|"
+    r"ticket|tickets|mim\s*ticket|incident\s*report|noc\s*report)\b",
+    re.I,
+)
+
 # Alertname → preferred agent (Layer 1)
 _ALERTNAME_AGENT: dict[str, str] = {
     name: "kubernetes-agent" for name in K8S_ALERT_HANDLERS
@@ -42,6 +52,7 @@ _ALERTNAME_AGENT.update(
 
 # Keywords → agent (Layer 2)
 _KEYWORD_AGENTS: list[tuple[str, str]] = [
+    ("freshservice-agent", r"\bMI-\d+\b|\b(incident|incidents|mim|outage|outages|freshservice|freshstatus|mttr|mttd|briefing|escalat|ticket|tickets)\b"),
     ("kubernetes-agent", r"\b(pod|pods|namespace|crashloop|deployment|kube|k8s|container)\b"),
     ("prometheus-agent", r"\b(prometheus|promql|metric|metrics|rpm|latency|cpu|memory|haystack|dashboard|targets?|scrape|exporter|series|alertmanager|firing)\b|up\s*==|up\s*\{"),
     ("rds-agent", r"\b(rds|database|db|sql|postgres|mysql|slow\s+query|connection\s+pool)\b"),
@@ -111,10 +122,14 @@ class AgentRouter:
     def _route_user_intent(
         self, query: str, agents: dict[str, RegisteredAgent]
     ) -> Optional[RegisteredAgent]:
-        """Follow-up questions: 'why crashing' → k8s, 'what is RPM' → prometheus."""
+        """Follow-up questions: 'why crashing' → k8s, 'what is RPM' → prometheus, 'MI-...' → freshservice."""
         user = self._user_question(query)
         if not user:
             return None
+        # Freshservice / incident questions always win at L0 for explicit signals
+        if _USER_FS.search(user) and "freshservice-agent" in agents:
+            logger.debug("User-intent freshservice signal → freshservice-agent")
+            return agents["freshservice-agent"]
         if _EXPLICIT_PROMQL.search(user) and "prometheus-agent" in agents:
             logger.debug("User-intent explicit promql → prometheus-agent")
             return agents["prometheus-agent"]

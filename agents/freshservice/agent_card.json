@@ -1,0 +1,58 @@
+{
+  "name": "freshservice-agent",
+  "description": "Freshworks NOC incident briefings assistant. Answers questions about Freshservice tickets, MIM incidents, outages, MTTR/MTTD, Freshstatus, and incident analytics. Routes to this agent for incident, MIM, ticket, outage, briefing, and Freshservice questions.",
+  "url": "http://freshservice-agent.a2a-ops.svc.cluster.local:8083",
+  "version": "1.0.0",
+  "capabilities": {
+    "streaming": true,
+    "pushNotifications": false
+  },
+  "skills": [
+    {
+      "id": "incident_briefing",
+      "name": "Incident Briefing",
+      "description": "Executive-ready briefings on active or recent Freshworks incidents and outages",
+      "tags": ["incident", "incidents", "outage", "outages", "briefing", "freshworks", "mim", "status"],
+      "examples": [
+        "What is the current active incident?",
+        "Give me a briefing on recent Freshdesk outages",
+        "Any active Freshstatus incidents?"
+      ]
+    },
+    {
+      "id": "ticket_lookup",
+      "name": "Ticket Lookup",
+      "description": "Fetch and summarise Freshservice MIM tickets by id or reference",
+      "tags": ["ticket", "tickets", "freshservice", "mi", "mim", "status", "assignee", "mttr", "mttd"],
+      "examples": [
+        "What is the status of MI-4301250?",
+        "Who is the owner of ticket 4301250?",
+        "What is the MTTR for MI-4500100?"
+      ]
+    },
+    {
+      "id": "incident_analytics",
+      "name": "Incident Analytics",
+      "description": "Count and trend questions — how many outages, by product, priority or cause segment",
+      "tags": ["analytics", "count", "trend", "monthly", "priority", "product", "cause", "deployment"],
+      "examples": [
+        "How many outages happened in April?",
+        "How many Freshdesk incidents in Q1 2026?",
+        "Incidents due to deployments this year"
+      ]
+    },
+    {
+      "id": "freshstatus",
+      "name": "Freshstatus",
+      "description": "Active and recent public Freshstatus incidents",
+      "tags": ["freshstatus", "status", "statuspage", "public", "external"],
+      "examples": [
+        "Check Freshstatus for active incidents",
+        "Are there any public status page incidents?"
+      ]
+    }
+  ],
+  "authentication": {
+    "schemes": ["bearer"]
+  }
+}
