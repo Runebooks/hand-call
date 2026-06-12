@@ -283,6 +283,13 @@ def resolve_alert_from_thread(
     return alert, combined, hint
 
 
+_FS_SIGNAL_RE = re.compile(
+    r"\bMI-\d+\b"
+    r"|\b(incident|mim|outage|freshservice|freshstatus|mttr|mttd|pir|handover|briefing|escalat)\b",
+    re.I,
+)
+
+
 def build_query(alert: AlertContext, user_prompt: str = "") -> str:
     """Build the agent query. User @mention text drives follow-ups; default uses alert handler."""
     pod = (alert.pod_hint or alert.alert_sre_attributes or "").strip()
@@ -290,6 +297,11 @@ def build_query(alert: AlertContext, user_prompt: str = "") -> str:
     prompt = (user_prompt or "").strip()
 
     if prompt:
+        # If the user is clearly asking about a Freshservice/MIM topic, do NOT
+        # inject Kubernetes context — it confuses the master-agent router.
+        if _FS_SIGNAL_RE.search(prompt):
+            return prompt
+
         from agents.kubernetes.intent import wants_namespace_pod_count
 
         namespace_scope = wants_namespace_pod_count(prompt)

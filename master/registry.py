@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
@@ -12,6 +13,9 @@ from common.config import agent_urls
 from common.models import AgentCard
 
 logger = logging.getLogger(__name__)
+
+# Re-attempt to register previously-failed agents every N seconds
+_RETRY_INTERVAL_S = 30.0
 
 
 @dataclass
@@ -42,9 +46,13 @@ class AgentRegistry:
         self._urls = urls if urls is not None else agent_urls()
         self._timeout = timeout
         self._agents: dict[str, RegisteredAgent] = {}
+        # Track URLs that failed on the last attempt so we can retry them
+        self._failed_urls: set[str] = set()
+        self._last_retry_at: float = 0.0
 
     def refresh(self) -> dict[str, RegisteredAgent]:
         self._agents.clear()
+        self._failed_urls.clear()
         for base in self._urls:
             try:
                 agent = self._fetch_card(base)
@@ -52,7 +60,24 @@ class AgentRegistry:
                 logger.info("Registered agent %s at %s", agent.name, agent.url)
             except Exception as exc:
                 logger.warning("Failed to load agent card from %s: %s", base, exc)
+                self._failed_urls.add(base)
         return self._agents
+
+    def _retry_failed(self) -> None:
+        """Attempt to register any agent URLs that failed previously."""
+        if not self._failed_urls:
+            return
+        recovered: set[str] = set()
+        for base in list(self._failed_urls):
+            try:
+                agent = self._fetch_card(base)
+                self._agents[agent.name] = agent
+                recovered.add(base)
+                logger.info("Recovered agent %s at %s", agent.name, agent.url)
+            except Exception:
+                pass
+        self._failed_urls -= recovered
+        self._last_retry_at = time.monotonic()
 
     def _fetch_card(self, base_url: str) -> RegisteredAgent:
         url = base_url.rstrip("/")
@@ -68,6 +93,8 @@ class AgentRegistry:
     def agents(self) -> dict[str, RegisteredAgent]:
         if not self._agents:
             self.refresh()
+        elif self._failed_urls and (time.monotonic() - self._last_retry_at) >= _RETRY_INTERVAL_S:
+            self._retry_failed()
         return self._agents
 
     def get(self, name: str) -> Optional[RegisteredAgent]:

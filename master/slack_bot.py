@@ -38,6 +38,7 @@ from master.slack_api import PRIVATE_CHANNEL_BOT_EVENTS, PRIVATE_CHANNEL_BOT_SCO
 from master.master_client import MasterAgentClient
 from master.slack_thread import (
     BOT_VERSION,
+    _FS_SIGNAL_RE,
     apply_confirmation_decision,
     extract_user_prompt,
     resolve_alert_from_thread,
@@ -71,6 +72,46 @@ def _should_handle_alertname(name: str) -> bool:
     if raw:
         return name in {a.strip() for a in raw.split(",") if a.strip()}
     return False
+
+
+def _run_direct(
+    client,
+    master,
+    *,
+    channel: str,
+    thread_ts: str,
+    query: str,
+) -> None:
+    """Send a query directly to master agent without a K8s alert context."""
+    from master.slack_thread import (
+        _to_slack_mrkdwn,
+        _split_confirm,
+        _split_log_artifacts,
+        _upload_log_artifacts,
+    )
+    try:
+        result = master.investigate(
+            query,
+            session_id=f"slack-{channel}-{thread_ts}",
+            extra_metadata={
+                "source": "slack",
+                "slack_channel": channel,
+                "slack_thread_ts": thread_ts,
+            },
+        )
+        reply = f"_via *{result.agent.name}*_\n{result.answer or '_No details returned._'}"
+        reply, confirm = _split_confirm(reply)
+        reply, log_artifacts = _split_log_artifacts(reply)
+        reply = _to_slack_mrkdwn(reply)
+        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=reply)
+        _upload_log_artifacts(client, channel=channel, thread_ts=thread_ts, artifacts=log_artifacts)
+    except Exception as exc:
+        err = str(exc)
+        if "Connection refused" in err or "ConnectError" in err:
+            reply = f":x: Could not reach the investigation service (`{err}`)."
+        else:
+            reply = f":x: Investigation failed: {exc}"
+        client.chat_postMessage(channel=channel, thread_ts=thread_ts, text=reply)
 
 
 def create_app() -> App:
@@ -173,6 +214,16 @@ def create_app() -> App:
         reply_ts = thread_ts
         if event:
             reply_ts = event.get("thread_ts") or event.get("ts") or thread_ts
+
+        user_prompt = extract_user_prompt(mention_text)
+
+        # If the user is asking about a Freshservice/MIM topic, bypass K8s alert
+        # requirement and send directly to the master agent for routing.
+        if _FS_SIGNAL_RE.search(user_prompt):
+            logger.info("Freshservice signal in mention — bypassing K8s alert check")
+            _run_direct(client, master, channel=channel, thread_ts=reply_ts, query=user_prompt)
+            return
+
         if alert is None:
             logger.warning(
                 "No alert parsed channel=%s thread_ts=%s context_len=%s preview=%s hint=%s",
@@ -212,7 +263,6 @@ def create_app() -> App:
             )
             return
 
-        user_prompt = extract_user_prompt(mention_text)
         run_investigation(
             client,
             master,
