@@ -121,13 +121,17 @@ class FreshserviceClient:
         and raw_bridge_notes for full LLM reasoning.
         """
         import re as _re
+        from concurrent.futures import ThreadPoolExecutor
 
-        ticket = self.get_ticket(ticket_id)
-        if "error" in ticket:
-            return ticket
-
-        conversations = self.get_ticket_conversations(ticket_id, limit=50)
-        activities = self.get_ticket_activities(ticket_id)
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            fut_ticket = pool.submit(self.get_ticket, ticket_id)
+            fut_convs = pool.submit(self.get_ticket_conversations, ticket_id, 50)
+            fut_acts = pool.submit(self.get_ticket_activities, ticket_id)
+            ticket = fut_ticket.result()
+            if "error" in ticket:
+                return ticket
+            conversations = fut_convs.result()
+            activities = fut_acts.result()
 
         cf = ticket.get("custom_fields") or {}
 

@@ -34,7 +34,7 @@ from common.llm import LLMClient, ToolsUnsupported
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_STEPS = 10
+DEFAULT_MAX_STEPS = 5
 SUBMIT_REPORT_NAME = "submit_report"
 
 # ---------------------------------------------------------------------------
@@ -145,6 +145,13 @@ def run_agent_loop(
     max_steps: int = DEFAULT_MAX_STEPS,
 ) -> AgentResult:
     """Run the LLM tool-calling loop and return a synthesized answer."""
+    from agents.freshservice.fast_path import try_fast_path
+
+    fast = try_fast_path(query, thread_messages=thread_messages, dispatcher=dispatcher)
+    if fast is not None:
+        logger.info("Fast-path hit route=%s (skipped LLM)", fast.route)
+        return fast
+
     llm = llm or LLMClient()
     specs = enabled_tool_specs(dispatcher) + [SUBMIT_REPORT_TOOL]
 

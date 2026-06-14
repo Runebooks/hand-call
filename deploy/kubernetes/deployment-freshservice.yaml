@@ -61,7 +61,19 @@ spec:
             - name: FRESHSERVICE_AGENT_MODE
               value: "mcp"
             - name: FRESHSERVICE_MCP_MAX_STEPS
-              value: "8"
+              value: "5"
+            - name: FRESHSERVICE_FAST_PATH
+              value: "true"
+            - name: FRESHSERVICE_CACHE_ENABLED
+              value: "true"
+            - name: FRESHSERVICE_PG_CACHE_FIRST
+              value: "true"
+            - name: FRESHSERVICE_PIR_CACHE_TTL
+              value: "3600"
+            - name: FRESHSERVICE_FRESHSTATUS_CACHE_TTL
+              value: "90"
+            - name: LLM_READ_TIMEOUT
+              value: "30"
             - name: LLM_ENABLED
               value: "true"
             - name: OPENAI_MAX_TOKENS

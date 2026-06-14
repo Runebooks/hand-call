@@ -9,6 +9,7 @@ All tools are read-only.
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -21,8 +22,29 @@ from agents.freshservice.mysql_client import MySQLClient
 from agents.freshservice.pg_store import PgStore
 from agents.freshservice.slack_client import SlackOutageClient
 from agents.freshservice.context_resolver import mi_ref_to_id
+from agents.freshservice.cache import (
+    PIR_CACHE,
+    FRESHSTATUS_CACHE,
+    TOOL_CACHE,
+    cache_enabled,
+    tool_cache_key,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _pg_cache_first() -> bool:
+    flag = os.environ.get("FRESHSERVICE_PG_CACHE_FIRST", "true").strip().lower()
+    return flag in ("1", "true", "yes", "on")
+
+
+def _use_pg_pir(cached: dict[str, Any]) -> bool:
+    """Prefer Postgres for resolved incidents; optional for open when PG_CACHE_FIRST=true."""
+    if not cached:
+        return False
+    if cached.get("incident_end_time"):
+        return True
+    return _pg_cache_first()
 
 # ---------------------------------------------------------------------------
 # Tool specs (OpenAI function-calling format)
@@ -320,12 +342,36 @@ class FreshserviceToolDispatcher:
             return {"error": "Freshservice API key not configured (FRESHSERVICE_API_KEY unset)."}
         raw_id = str(args.get("ticket_id") or "")
         tid = mi_ref_to_id(raw_id) or raw_id
+        cache_key = tool_cache_key("get_pir", {"ticket_id": tid})
+
+        if cache_enabled():
+            hit = PIR_CACHE.get(cache_key)
+            if hit is not None:
+                out = dict(hit)
+                out["source"] = out.get("source") or "memory_cache"
+                return out
+
+        if self.pg.enabled:
+            cached = self.pg.store_get_pir(tid)
+            if _use_pg_pir(cached):
+                cached = dict(cached)
+                cached["source"] = "pg_cache"
+                if cache_enabled():
+                    PIR_CACHE.set(cache_key, cached)
+                return cached
+
         try:
-            return self.fs.get_pir(tid)
+            pir = self.fs.get_pir(tid)
+            if cache_enabled() and pir and not pir.get("error"):
+                PIR_CACHE.set(cache_key, pir)
+            return pir
         except FreshserviceUnavailable as exc:
             cached = self.pg.store_get_pir(tid) if self.pg.enabled else {}
             if cached:
+                cached = dict(cached)
                 cached["source"] = "pg_fallback"
+                if cache_enabled():
+                    PIR_CACHE.set(cache_key, cached)
                 return cached
             return {"error": f"Freshservice unavailable ({exc}); no cached PIR in MIM_Store.", "ticket_id": tid}
 
@@ -393,26 +439,41 @@ class FreshserviceToolDispatcher:
 
     def _tool_get_freshstatus_incidents(self, args: dict) -> Any:
         active_only = bool(args.get("active_only", False))
+        cache_key = tool_cache_key("freshstatus", {"active_only": active_only})
+        if cache_enabled():
+            hit = FRESHSTATUS_CACHE.get(cache_key)
+            if hit is not None:
+                return hit
+
         if active_only:
             active = self.status.get_active_incidents()
-            return {"active_count": len(active), "active": active}
-        active = self.status.get_active_incidents()
-        recent = self.status.get_recent_incidents(limit=20)
-        return {
-            "active_count": len(active),
-            "active": active,
-            "recent_count": len(recent),
-            "recent": recent,
-        }
+            out = {"active_count": len(active), "active": active}
+        else:
+            active = self.status.get_active_incidents()
+            recent = self.status.get_recent_incidents(limit=20)
+            out = {
+                "active_count": len(active),
+                "active": active,
+                "recent_count": len(recent),
+                "recent": recent,
+            }
+        if cache_enabled():
+            FRESHSTATUS_CACHE.set(cache_key, out)
+        return out
 
     def _tool_check_ongoing_outages(self, args: dict) -> Any:
         """Confirm ongoing outages across Freshstatus AND the fw-outage Slack channel."""
         hours = int(args.get("hours") or 24)
+        cache_key = tool_cache_key("ongoing_outages", {"hours": hours})
+        if cache_enabled():
+            hit = TOOL_CACHE.get(cache_key)
+            if hit is not None:
+                return hit
         active = self.status.get_active_incidents()
         slack_msgs = self.slack.get_recent_messages(hours=hours) if self.slack.enabled else []
         slack_available = self.slack.enabled
         ongoing = bool(active) or bool(slack_msgs)
-        return {
+        out = {
             "ongoing_outage": ongoing,
             "freshstatus_active_count": len(active),
             "freshstatus_active": active,
@@ -425,6 +486,9 @@ class FreshserviceToolDispatcher:
                 "Checked both Freshstatus public incidents and internal fw-outage Slack chatter."
             ),
         }
+        if cache_enabled():
+            TOOL_CACHE.set(cache_key, out, ttl=60.0)
+        return out
 
     def _tool_query_outages(self, args: dict) -> Any:
         if not self.db.enabled:
