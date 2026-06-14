@@ -32,9 +32,12 @@ _EXPLICIT_PROMQL = re.compile(r"(?:promql|query)\s*[:=]", re.I)
 # Matches explicit MIM ticket references and strong NOC incident signals.
 _USER_FS = re.compile(
     r"\bMI-\d+\b"
-    r"|\b(incident|incidents|mim|outage|outages|freshservice|freshstatus|"
+    r"|\b(incident|incidents|mims?|outage|outages|freshservice|freshstatus|"
     r"handover|status\s*page|zoom\s*link|mttr|mttd|briefing|escalat|"
-    r"ticket|tickets|mim\s*ticket|incident\s*report|noc\s*report)\b",
+    r"ticket|tickets|mim\s*ticket|incident\s*report|noc\s*report|"
+    r"third.party|issue\s*category|major\s*incident|pir|"
+    r"root.cause|customer.impact|post.incident|personnel|"
+    r"who.was.involved|incident.timeline)\b",
     re.I,
 )
 
@@ -52,7 +55,7 @@ _ALERTNAME_AGENT.update(
 
 # Keywords → agent (Layer 2)
 _KEYWORD_AGENTS: list[tuple[str, str]] = [
-    ("freshservice-agent", r"\bMI-\d+\b|\b(incident|incidents|mim|outage|outages|freshservice|freshstatus|mttr|mttd|briefing|escalat|ticket|tickets)\b"),
+    ("freshservice-agent", r"\bMI-\d+\b|\b(incident|incidents|mims?|outage|outages|freshservice|freshstatus|mttr|mttd|briefing|escalat|ticket|tickets|third.party|pir|major\s*incident|root.cause|customer.impact|post.incident|personnel|who.was.involved)\b"),
     ("kubernetes-agent", r"\b(pod|pods|namespace|crashloop|deployment|kube|k8s|container)\b"),
     ("prometheus-agent", r"\b(prometheus|promql|metric|metrics|rpm|latency|cpu|memory|haystack|dashboard|targets?|scrape|exporter|series|alertmanager|firing)\b|up\s*==|up\s*\{"),
     ("rds-agent", r"\b(rds|database|db|sql|postgres|mysql|slow\s+query|connection\s+pool)\b"),

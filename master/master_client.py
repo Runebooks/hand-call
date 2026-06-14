@@ -19,7 +19,7 @@ class MasterAgentClient:
     Falls back to in-process orchestrator when URL is empty (local dev only).
     """
 
-    def __init__(self, base_url: Optional[str] = None, timeout: float = 120.0):
+    def __init__(self, base_url: Optional[str] = None, timeout: float = 300.0):
         if base_url is not None:
             self.base_url = base_url.strip().rstrip("/")
         else:

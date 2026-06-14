@@ -79,13 +79,15 @@ spec:
               port: 8083
             initialDelaySeconds: 60
             periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 8
           resources:
             requests:
               cpu: "100m"
-              memory: "256Mi"
+              memory: "512Mi"
             limits:
               cpu: "500m"
-              memory: "512Mi"
+              memory: "768Mi"
       volumes:
         - name: source
           configMap:

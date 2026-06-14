@@ -11,11 +11,13 @@
     {
       "id": "incident_briefing",
       "name": "Incident Briefing",
-      "description": "Executive-ready briefings on active or recent Freshworks incidents and outages",
-      "tags": ["incident", "incidents", "outage", "outages", "briefing", "freshworks", "mim", "status"],
+      "description": "Executive-ready briefings on active or recent Freshworks incidents and outages; confirms ongoing outages across Freshstatus and the fw-outage Slack channel",
+      "tags": ["incident", "incidents", "outage", "outages", "briefing", "freshworks", "mim", "status", "ongoing", "active"],
       "examples": [
         "What is the current active incident?",
         "Give me a briefing on recent Freshdesk outages",
+        "Is there any ongoing outage right now?",
+        "Are we down anywhere at the moment?",
         "Any active Freshstatus incidents?"
       ]
     },
@@ -33,10 +35,12 @@
     {
       "id": "incident_analytics",
       "name": "Incident Analytics",
-      "description": "Count and trend questions — how many outages, by product, priority or cause segment",
-      "tags": ["analytics", "count", "trend", "monthly", "priority", "product", "cause", "deployment"],
+      "description": "Count, trend, and root-cause questions — how many outages, by product, priority, issue category (Infra/Third-party/Code) or time window",
+      "tags": ["analytics", "count", "trend", "monthly", "priority", "product", "cause", "deployment", "third-party", "infra", "issue category"],
       "examples": [
         "How many outages happened in April?",
+        "MIM related to third-party in the last month",
+        "How many infra incidents in the last 6 months?",
         "How many Freshdesk incidents in Q1 2026?",
         "Incidents due to deployments this year"
       ]

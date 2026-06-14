@@ -34,6 +34,13 @@ kubectl create secret generic freshservice-agent-config \
   --from-literal=MYSQL_USER="${MYSQL_USER:-}" \
   --from-literal=MYSQL_PASSWORD="${MYSQL_PASSWORD:-}" \
   --from-literal=MYSQL_DATABASE="${MYSQL_DATABASE:-}" \
+  --from-literal=PGHOST="${PGHOST:-}" \
+  --from-literal=PGPORT="${PGPORT:-5432}" \
+  --from-literal=PGDATABASE="${PGDATABASE:-fw-noc}" \
+  --from-literal=PGUSER="${PGUSER:-dbuser}" \
+  --from-literal=PGPASSWORD="${PGPASSWORD:-}" \
+  --from-literal=PGSSLMODE="${PGSSLMODE:-require}" \
+  --from-literal=SLACK_BOT_TOKEN="${SLACK_BOT_TOKEN:-}" \
   --from-literal=FW_OUTAGE_SLACK_CHANNEL_ID="${FW_OUTAGE_SLACK_CHANNEL_ID:-}" \
   --dry-run=client -o yaml | kubectl apply -f -
 

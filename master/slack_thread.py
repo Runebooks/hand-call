@@ -285,7 +285,10 @@ def resolve_alert_from_thread(
 
 _FS_SIGNAL_RE = re.compile(
     r"\bMI-\d+\b"
-    r"|\b(incident|mim|outage|freshservice|freshstatus|mttr|mttd|pir|handover|briefing|escalat)\b",
+    r"|\b(incident|incidents|mims?|outage|outages|freshservice|freshstatus|"
+    r"mttr|mttd|pir|handover|briefing|escalat|noc\s*report|third.party|"
+    r"issue\s*category|major\s*incident|root.cause|customer.impact|"
+    r"post.incident|personnel|who.was.involved|timeline)\b",
     re.I,
 )
 

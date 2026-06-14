@@ -13,7 +13,7 @@ from .models import JSONRPCResponse, Message, Task, TaskSendParams
 
 
 class A2AClient:
-    def __init__(self, base_url: Optional[str] = None, timeout: float = 120.0):
+    def __init__(self, base_url: Optional[str] = None, timeout: float = 300.0):
         self.base_url = (
             base_url
             or os.environ.get(

@@ -25,6 +25,8 @@ from common.llm import LLMClient
 from agents.freshservice.freshservice_client import FreshserviceClient
 from agents.freshservice.freshstatus_client import FreshstatusClient
 from agents.freshservice.mysql_client import MySQLClient
+from agents.freshservice.pg_store import PgStore
+from agents.freshservice.slack_client import SlackOutageClient
 from agents.freshservice.mcp_server import FreshserviceToolDispatcher
 from agents.freshservice.agent_loop import run_agent_loop, DEFAULT_MAX_STEPS
 
@@ -44,8 +46,10 @@ class FreshserviceAgent(A2AServer):
         self.fs_client = FreshserviceClient()
         self.status_client = FreshstatusClient()
         self.db_client = MySQLClient()
+        self.pg_store = PgStore()
+        self.slack_client = SlackOutageClient()
         self.dispatcher = FreshserviceToolDispatcher(
-            self.fs_client, self.status_client, self.db_client
+            self.fs_client, self.status_client, self.db_client, self.pg_store, self.slack_client
         )
         self.llm = LLMClient()
         try:
@@ -64,7 +68,19 @@ class FreshserviceAgent(A2AServer):
         if not self.fs_client.enabled:
             logger.warning("FRESHSERVICE_API_KEY not set — Freshservice tools disabled.")
         if not self.db_client.enabled:
-            logger.info("MYSQL_HOST not set — MySQL tools disabled (API-only mode).")
+            logger.info("MYSQL_HOST not set — legacy MySQL tools disabled (API-only mode).")
+        if self.pg_store.enabled:
+            try:
+                self.pg_store.ensure_schema()
+                logger.info("MIM_Store (Postgres fallback) ready: %d rows cached.", self.pg_store.count())
+            except Exception as exc:
+                logger.warning("MIM_Store schema/connect check failed (fallback disabled): %s", exc)
+        else:
+            logger.info("PGHOST not set — Postgres MIM_Store fallback disabled.")
+        if self.slack_client.enabled:
+            logger.info("fw-outage Slack reader enabled (channel=%s).", self.slack_client.channel_id)
+        else:
+            logger.info("fw-outage Slack reader disabled (SLACK_BOT_TOKEN / FW_OUTAGE_SLACK_CHANNEL_ID unset).")
 
     async def process_task(self, task: Task) -> Task:
         query = task.message.get_text() if task.message else ""
@@ -82,24 +98,38 @@ class FreshserviceAgent(A2AServer):
             query[:120].replace("\n", " "),
         )
 
+        import asyncio
+        loop = asyncio.get_event_loop()
+
         try:
-            result = run_agent_loop(
-                query,
-                metadata=meta,
-                thread_messages=meta.get("thread_messages"),
-                dispatcher=self.dispatcher,
-                llm=self.llm,
-                max_steps=self._max_steps,
+            # Run the blocking LLM loop in a thread pool so the asyncio event loop
+            # stays free to serve liveness/readiness health checks during long LLM calls.
+            result = await loop.run_in_executor(
+                None,
+                lambda: run_agent_loop(
+                    query,
+                    metadata=meta,
+                    thread_messages=meta.get("thread_messages"),
+                    dispatcher=self.dispatcher,
+                    llm=self.llm,
+                    max_steps=self._max_steps,
+                ),
             )
             answer = self._footer(result.answer, route=result.route)
             task.add_artifact(Artifact.text(answer, name="freshservice-result"))
             task.mark_completed()
         except Exception as exc:
             logger.exception("Freshservice agent failed: %s", query)
+            import httpx as _httpx
+            if isinstance(exc, (_httpx.ReadTimeout, _httpx.TimeoutException)):
+                msg = (
+                    ":hourglass_flowing_sand: The LLM gateway is responding slowly right now. "
+                    "Please try again in 30–60 seconds — the underlying data tools are working fine."
+                )
+            else:
+                msg = f"Freshservice agent error: {exc}\n\nQuery: {query}"
             task.mark_failed(str(exc))
-            task.add_artifact(
-                Artifact.text(f"Freshservice agent error: {exc}\n\nQuery: {query}")
-            )
+            task.add_artifact(Artifact.text(msg))
         return task
 
     def _footer(self, text: str, route: str = "") -> str:

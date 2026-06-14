@@ -88,15 +88,50 @@ def _run_direct(
         _split_confirm,
         _split_log_artifacts,
         _upload_log_artifacts,
+        fetch_thread_messages,
     )
+    from master.slack_message_text import extract_message_text
+
+    # Post an immediate acknowledgment so the user isn't waiting in silence
+    try:
+        client.chat_postMessage(
+            channel=channel,
+            thread_ts=thread_ts,
+            text=":mag: Looking up incident details…",
+        )
+    except Exception:
+        pass  # best-effort; don't fail the whole flow
+
+    # Fetch prior thread turns so follow-up questions are contextual
+    # ("the 6 incidents you listed", "details on that one"). Best-effort.
+    thread_msgs: list[dict] = []
+    try:
+        from master.slack_thread import strip_bot_mention
+
+        raw, _err = fetch_thread_messages(client, channel, thread_ts)
+        q_norm = query.strip().lower()
+        for m in raw or []:
+            text = strip_bot_mention(extract_message_text(m)).strip()
+            if not text:
+                continue
+            # Skip the current question (it appears in the thread as the latest turn)
+            if q_norm and q_norm in text.lower():
+                continue
+            if text.startswith(":mag:") or text.startswith(":hourglass") or text.startswith(":x:"):
+                continue  # skip our own ack / working / error messages
+            thread_msgs.append({"role": "assistant" if m.get("bot_id") else "user", "content": text})
+    except Exception:
+        thread_msgs = []
+
     try:
         result = master.investigate(
             query,
-            session_id=f"slack-{channel}-{thread_ts}",
+            session_id=f"fs-{channel}-{thread_ts}",
             extra_metadata={
                 "source": "slack",
                 "slack_channel": channel,
                 "slack_thread_ts": thread_ts,
+                "thread_messages": thread_msgs,
             },
         )
         reply = f"_via *{result.agent.name}*_\n{result.answer or '_No details returned._'}"

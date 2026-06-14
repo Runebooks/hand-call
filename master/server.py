@@ -87,11 +87,24 @@ class MasterAgent(A2AServer):
 
         try:
             task.mark_working("Routing to specialist agent…")
-            result = self.orchestrator.investigate(
-                query,
-                alert=alert,
-                session_id=session_id,
-                extra_metadata=non_alert_metadata(meta),
+            # orchestrator.investigate makes a blocking, synchronous downstream HTTP
+            # call to a specialist agent (which itself waits on an LLM). Running it
+            # directly here would freeze the asyncio event loop for the whole duration,
+            # so the single uvicorn worker could not accept any other connection
+            # (causing "Connection refused" for concurrent Slack queries). Offload it
+            # to a thread so the event loop stays free to serve health checks and
+            # accept concurrent investigations.
+            import asyncio
+
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.orchestrator.investigate(
+                    query,
+                    alert=alert,
+                    session_id=session_id,
+                    extra_metadata=non_alert_metadata(meta),
+                ),
             )
             task.metadata = {
                 **meta,

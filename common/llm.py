@@ -235,17 +235,40 @@ class OpenAIClient:
             payload["reasoning_effort"] = reasoning
 
         url = f"{self.base_url}/chat/completions"
-        with httpx.Client(timeout=90.0) as client:
-            response = client.post(url, headers=self._headers(), json=payload)
-            if response.status_code >= 400:
-                body = response.text[:500]
-                if tools and _looks_like_tools_unsupported(response.status_code, body):
-                    self._supports_tools = False
-                    raise ToolsUnsupported(
-                        f"Gateway rejected tools ({response.status_code}): {body}"
-                    )
-                raise RuntimeError(f"LLM API error {response.status_code}: {body}")
-            data = response.json()
+        # Healthy gateway calls return in 1-3s. Anything past ~45s is a stalled
+        # connection, not real work — so we fail fast and retry on a FRESH
+        # connection immediately (no long backoff). This bounds a single stall to
+        # ~45s + a quick retry instead of the old 90s+90s (~185s) worst case.
+        read_timeout = float(os.environ.get("LLM_READ_TIMEOUT", "45"))
+        max_attempts = int(os.environ.get("LLM_MAX_ATTEMPTS", "3"))
+        timeout = httpx.Timeout(read_timeout, connect=10.0, write=10.0, pool=10.0)
+        last_exc: Exception | None = None
+        for attempt in range(max_attempts):
+            if attempt:
+                logger.info(
+                    "LLM chat stalled (attempt %s/%s); retrying on a fresh connection",
+                    attempt, max_attempts,
+                )
+            try:
+                with httpx.Client(timeout=timeout) as client:
+                    response = client.post(url, headers=self._headers(), json=payload)
+                    if response.status_code >= 400:
+                        body = response.text[:500]
+                        if tools and _looks_like_tools_unsupported(response.status_code, body):
+                            self._supports_tools = False
+                            raise ToolsUnsupported(
+                                f"Gateway rejected tools ({response.status_code}): {body}"
+                            )
+                        raise RuntimeError(f"LLM API error {response.status_code}: {body}")
+                    data = response.json()
+                    break  # success
+            except (httpx.ReadTimeout, httpx.ConnectTimeout, httpx.PoolTimeout, httpx.ConnectError) as exc:
+                last_exc = exc
+                if attempt < max_attempts - 1:
+                    continue
+                raise
+        else:
+            raise last_exc  # type: ignore[misc]
 
         if tools:
             self._supports_tools = True

@@ -15,4 +15,5 @@ mcp>=1.2.0
 slack-bolt>=1.21.0
 slack-sdk>=3.33.0
 
-pymysql>=1.1.0           # Freshservice agent MySQL client (optional)
+pymysql>=1.1.0           # Freshservice agent MySQL client (optional, legacy n8n tables)
+psycopg2-binary>=2.9.9   # Freshservice agent PostgreSQL store (fw-noc MIM_Store cache)
