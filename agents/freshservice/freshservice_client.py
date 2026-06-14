@@ -303,6 +303,13 @@ class FreshserviceClient:
             m = _dre.search(r"(\d{4})-(\d{2})-(\d{2})", date_filter)
             if m:
                 date_prefix = m.group(0)
+                # Guard: LLMs sometimes hallucinate old years (e.g. 2023 instead of 2026).
+                # If the year is more than 1 year in the past relative to now, replace it.
+                from datetime import datetime as _dt
+                _cur_year = _dt.now().year
+                _parsed_year = int(date_prefix[:4])
+                if _parsed_year < _cur_year - 1:
+                    date_prefix = f"{_cur_year}{date_prefix[4:]}"
             else:
                 m2 = _dre.search(r"(\w{3,9})\s+(\d{1,2}),?\s*(\d{4})?", date_lower)
                 if m2:
@@ -314,9 +321,11 @@ class FreshserviceClient:
                         date_prefix = f"{yr}-{mon_num}-{day}"
 
         # ── months_back window cutoff ────────────────────────────────────────────
+        # Use 31 days per month so "last month" reliably covers full calendar months
+        # (30-day windows miss boundary dates like May 14 when today is June 14).
         cutoff_iso = ""
         if months_back and months_back > 0:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=30 * months_back)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=31 * months_back)
             cutoff_iso = cutoff.strftime("%Y-%m-%d")
 
         # ── issue_category normalization (synonym-aware) ─────────────────────────
@@ -342,7 +351,12 @@ class FreshserviceClient:
 
         prod_lower = product_filter.lower().strip()
 
-        while len(collected) < limit:
+        # When a cutoff_iso is set we must fetch ALL pages within the window
+        # (not stop at `limit` collected) — otherwise a high-volume product like
+        # Freshdesk has 15+ newer tickets and the older target date is never reached.
+        # We cap at a hard safety limit to avoid runaway pagination.
+        _PAGE_HARD_LIMIT = 20
+        while cutoff_iso or len(collected) < limit:
             url = f"{self._base()}/tickets"
             params: dict[str, Any] = {
                 "workspace_id": "24",
@@ -422,14 +436,16 @@ class FreshserviceClient:
                     "pir_generated": cf.get("pir_generated"),
                     "pir_url": f"https://{self.domain}/a/tickets/{t.get('id')}/post-incident-report",
                 })
-                if len(collected) >= limit:
+                if len(collected) >= limit and not cutoff_iso:
                     break
 
-            if reached_cutoff or len(tickets) < per_page:
+            if reached_cutoff or len(tickets) < per_page or page >= _PAGE_HARD_LIMIT:
+                break
+            if not cutoff_iso and len(collected) >= limit:
                 break
             page += 1
 
-        return collected
+        return collected[:limit] if not cutoff_iso else collected
 
     def search_tickets(
         self,

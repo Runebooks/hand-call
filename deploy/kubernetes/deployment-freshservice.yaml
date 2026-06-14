@@ -64,6 +64,10 @@ spec:
               value: "8"
             - name: LLM_ENABLED
               value: "true"
+            - name: OPENAI_MAX_TOKENS
+              value: "16000"
+            - name: OPENAI_TEMPERATURE
+              value: "0"
           volumeMounts:
             - name: source
               mountPath: /src

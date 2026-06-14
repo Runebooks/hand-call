@@ -110,9 +110,9 @@ TOOL_SPECS: list[dict[str, Any]] = [
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Product or keyword filter (e.g. 'Freshdesk', 'performance'). Leave empty for all recent MIM tickets."},
-                    "date_filter": {"type": "string", "description": "Filter by a specific incident date, e.g. 'May 14', '2026-05-14', 'June 4'. Matches against incident_start_time."},
+                    "date_filter": {"type": "string", "description": "Filter by a specific incident date. Use YYYY-MM-DD format (current year is 2026). Examples: '2026-05-14', '2026-06-04'. If the user says 'May 14' without a year, always use '2026-05-14'."},
                     "issue_category": {"type": "string", "description": "Filter by root-cause category: 'Third-party', 'Infra', 'Code', 'Database', 'Deployment', or 'Configuration'. Synonym-aware (e.g. 'vendor'/'external' map to Third-party)."},
-                    "months_back": {"type": "integer", "description": "Only include incidents within the last N months (e.g. 1 = last month, 6 = last 6 months)."},
+                    "months_back": {"type": "integer", "description": "Only include incidents within the last N months (31 days per month). Use months_back=2 whenever the user names a specific past date or month (e.g. 'May 14', 'last month') to avoid boundary misses."},
                     "per_page": {"type": "integer", "description": "Max results (default 15, max 30)."},
                 },
             },

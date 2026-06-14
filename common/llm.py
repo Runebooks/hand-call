@@ -8,6 +8,8 @@ Configure via environment (never commit secrets):
   CLOUDVERSE_BASE_URL   — Cloudverse gateway, e.g. https://<host>/v1 (JWT only)
   OPENAI_BASE_URL       — overrides base URL (use CLOUDVERSE_BASE_URL for JWT)
   OPENAI_REASONING_EFFORT — optional: none, low, medium, high (default: none)
+  OPENAI_MAX_TOKENS      — max output tokens per call (default: 16000)
+  OPENAI_TEMPERATURE     — sampling temperature (default: 0)
   LLM_ENABLED           — default: true when API key + compatible base URL are set
 """
 
@@ -25,6 +27,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_MODEL = "gpt-5.5"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MAX_TOKENS = 16000
+DEFAULT_TEMPERATURE = 0.0
 
 JWT_INCOMPATIBLE_HINT = (
     "OPENAI_API_KEY is a Cloudverse / Freddy JWT (eyJ...). It cannot call "
@@ -74,6 +78,26 @@ def jwt_incompatible_base(api_key: str, base_url: str) -> bool:
     if not base_url:
         return auth_mode() != "cloudverse"
     return is_public_openai_base(base_url)
+
+
+def default_max_tokens() -> int:
+    raw = (os.environ.get("OPENAI_MAX_TOKENS") or "").strip()
+    if raw:
+        try:
+            return max(1, int(raw))
+        except ValueError:
+            pass
+    return DEFAULT_MAX_TOKENS
+
+
+def default_temperature() -> float:
+    raw = (os.environ.get("OPENAI_TEMPERATURE") or "").strip()
+    if raw:
+        try:
+            return float(raw)
+        except ValueError:
+            pass
+    return DEFAULT_TEMPERATURE
 
 
 class OpenAIClient:
@@ -145,7 +169,7 @@ class OpenAIClient:
         self,
         system: str,
         user: str,
-        max_tokens: int = 512,
+        max_tokens: Optional[int] = None,
     ) -> dict[str, Any]:
         """Call OpenAI-compatible API and parse a JSON object from the response."""
         if not self.enabled():
@@ -163,7 +187,8 @@ class OpenAIClient:
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else default_max_tokens(),
+            "temperature": default_temperature(),
             "messages": [
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -199,7 +224,7 @@ class OpenAIClient:
         *,
         tools: Optional[list[dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
-        max_tokens: int = 1024,
+        max_tokens: Optional[int] = None,
         temperature: Optional[float] = None,
     ) -> dict[str, Any]:
         """Raw chat completion.
@@ -221,11 +246,10 @@ class OpenAIClient:
 
         payload: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": max_tokens,
+            "max_tokens": max_tokens if max_tokens is not None else default_max_tokens(),
+            "temperature": temperature if temperature is not None else default_temperature(),
             "messages": messages,
         }
-        if temperature is not None:
-            payload["temperature"] = temperature
         if tools:
             payload["tools"] = tools
             if tool_choice:
@@ -240,7 +264,7 @@ class OpenAIClient:
         # connection immediately (no long backoff). This bounds a single stall to
         # ~45s + a quick retry instead of the old 90s+90s (~185s) worst case.
         read_timeout = float(os.environ.get("LLM_READ_TIMEOUT", "45"))
-        max_attempts = int(os.environ.get("LLM_MAX_ATTEMPTS", "3"))
+        max_attempts = int(os.environ.get("LLM_MAX_ATTEMPTS", "2"))
         timeout = httpx.Timeout(read_timeout, connect=10.0, write=10.0, pool=10.0)
         last_exc: Exception | None = None
         for attempt in range(max_attempts):

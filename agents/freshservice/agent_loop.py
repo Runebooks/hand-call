@@ -249,6 +249,12 @@ def _native_tool_loop(
                 result = dispatcher.call_tool(name, args)
                 if name in ("search_tickets", "list_major_incidents"):
                     _try_extract_mi_from_result(state, result)
+                # Fast-path: check_ongoing_outages returns fully structured data —
+                # no second LLM call needed. Render directly and return immediately.
+                if name == "check_ongoing_outages":
+                    rendered = _render_ongoing_outage(result)
+                    if rendered:
+                        return AgentResult(answer=rendered, route="llm-mcp", steps=step)
                 messages.append(
                     {
                         "role": "tool",
@@ -476,7 +482,7 @@ def _json_planner_loop(
             obs_block = "\n\nObservations so far:\n" + "\n".join(observations)
         user = f"User question: {query}{obs_block}"
         try:
-            plan = llm.complete_json(system=planner_system, user=user, max_tokens=1200)
+            plan = llm.complete_json(system=planner_system, user=user)
         except Exception as exc:
             logger.warning("Planner JSON call failed: %s", exc)
             break
@@ -517,7 +523,7 @@ def _json_planner_loop(
         + '\n\nRespond now with {"tool": "submit_report", "args": {<report fields>}}.'
     )
     try:
-        final = llm.complete_json(system=planner_system, user=summary_user, max_tokens=1200)
+        final = llm.complete_json(system=planner_system, user=summary_user)
         if final.get("tool") == SUBMIT_REPORT_NAME:
             args = final.get("args") or {}
             rendered = render_report(args)
@@ -540,6 +546,47 @@ def _json_planner_loop(
 # ---------------------------------------------------------------------------
 # Utilities
 # ---------------------------------------------------------------------------
+
+
+def _render_ongoing_outage(result: ToolResult) -> Optional[str]:
+    """Fast-path renderer for check_ongoing_outages — no LLM call needed.
+
+    The tool returns fully structured data. We can compose a precise answer
+    directly, eliminating one entire LLM round-trip (and its potential stall).
+    Returns None if the data isn't in the expected shape (fall through to LLM).
+    """
+    data = result.data if isinstance(result.data, dict) else {}
+    if not data:
+        return None
+
+    active = data.get("freshstatus_active") or []
+    active_count = int(data.get("freshstatus_active_count") or 0)
+    slack_msgs = data.get("fw_outage_recent_messages") or []
+
+    if active_count == 0 and not slack_msgs:
+        return "No ongoing outages right now. Freshstatus shows all systems operational and there are no recent messages in the fw-outage channel."
+
+    lines: list[str] = []
+    if active_count > 0:
+        lines.append(f":red_circle: *{active_count} active Freshstatus incident(s) right now:*")
+        for inc in active[:5]:
+            title = inc.get("name") or inc.get("title") or "Untitled"
+            status = inc.get("status") or ""
+            updated = str(inc.get("updated_at") or inc.get("created_at") or "")[:16]
+            lines.append(f"• *{title}*  |  status: {status}  |  updated: {updated}")
+    else:
+        lines.append(":large_green_circle: Freshstatus shows no active incidents.")
+
+    if slack_msgs:
+        lines.append(f"\n:slack: *fw-outage Slack ({len(slack_msgs)} recent message(s)):*")
+        for msg in slack_msgs[:3]:
+            text = (msg.get("text") or "").strip()[:200]
+            if text:
+                lines.append(f"> {text}")
+    elif data.get("fw_outage_slack_available") is False:
+        lines.append("_(fw-outage Slack channel not accessible — Freshstatus is the authoritative source)_")
+
+    return "\n".join(lines)
 
 
 def _pir_compact(result: ToolResult) -> ToolResult:

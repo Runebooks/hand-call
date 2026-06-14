@@ -44,7 +44,11 @@ spec:
             - name: PYTHONUNBUFFERED
               value: "1"
             - name: OPENAI_MODEL
-              value: "Azure-GPT-5.2-chat"
+              value: "Azure-GPT-4o-mini"
+            - name: OPENAI_MAX_TOKENS
+              value: "16000"
+            - name: OPENAI_TEMPERATURE
+              value: "0"
             - name: OPENAI_REASONING_EFFORT
               value: "none"
             - name: K8S_MUTATIONS_ENABLED
